@@ -1,0 +1,150 @@
+<!-- Users Management Page -->
+<div class="card" style="margin-bottom:15px;">
+    <div class="card-header">User Login</div>
+    <div class="card-body">
+        <div class="login-inline">
+            <span>Enter PIN:</span>
+            <input type="password" class="form-input form-input-sm" id="login-pin" maxlength="4" placeholder="----">
+            <button class="btn btn-primary" onclick="login()">Login</button>
+        </div>
+    </div>
+</div>
+
+<div class="action-bar">
+    <div class="action-bar-left">
+        <button class="btn btn-primary" onclick="showAddUserModal()">+ Add User</button>
+    </div>
+    <div class="action-bar-right">
+        <button class="btn btn-refresh" onclick="loadUsers()">Refresh</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Registered Users</div>
+    <div class="card-body no-padding">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th style="width:60px;">ID</th>
+                    <th>Name</th>
+                    <th style="width:100px;">PIN</th>
+                    <th style="width:80px;">Status</th>
+                    <th style="width:100px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="users-table">
+                <tr><td colspan="5" class="table-empty">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function init_users() {
+    loadUsers();
+}
+
+async function loadUsers() {
+    try {
+        const data = await API.get('/users');
+        const tbody = document.getElementById('users-table');
+        
+        if (!data.users || data.users.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No users registered</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = data.users.map(user => `
+            <tr>
+                <td>${user.id}</td>
+                <td>${user.name}</td>
+                <td>••••</td>
+                <td><span class="badge ${user.active ? 'badge-success' : 'badge-muted'}">${user.active ? 'Active' : 'Inactive'}</span></td>
+                <td>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        console.error('Load users failed:', err);
+        document.getElementById('users-table').innerHTML = '<tr><td colspan="5" class="table-empty">Failed to load</td></tr>';
+    }
+}
+
+async function login() {
+    const pin = document.getElementById('login-pin').value;
+    
+    if (pin.length !== 4) {
+        showToast('PIN must be 4 digits', 'warning');
+        return;
+    }
+    
+    try {
+        const data = await API.post('/users/login', { pin });
+        if (data.success) {
+            document.getElementById('user-display').textContent = data.name;
+            document.getElementById('login-pin').value = '';
+            showToast(`Logged in as ${data.name}`, 'success');
+        } else {
+            showToast('Invalid PIN', 'error');
+        }
+    } catch (err) {
+        showToast('Login failed', 'error');
+    }
+}
+
+function showAddUserModal() {
+    showModal('Add New User', `
+        <div class="form-group">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-input" id="user-name" placeholder="User name">
+        </div>
+        <div class="form-group">
+            <label class="form-label">PIN (4 digits)</label>
+            <input type="password" class="form-input form-input-sm" id="user-pin" maxlength="4" placeholder="----">
+        </div>
+    `, `
+        <button class="btn" onclick="hideModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="createUser()">Add User</button>
+    `);
+}
+
+async function createUser() {
+    const name = document.getElementById('user-name').value.trim();
+    const pin = document.getElementById('user-pin').value;
+    
+    if (!name || pin.length !== 4) {
+        showToast('Please fill all fields (PIN must be 4 digits)', 'error');
+        return;
+    }
+    
+    try {
+        await API.post('/users', { name, pin });
+        hideModal();
+        showToast('User added', 'success');
+        loadUsers();
+    } catch (err) {
+        showToast('Failed to add user', 'error');
+    }
+}
+
+async function deleteUser(id) {
+    showConfirm('Delete User', 'Are you sure you want to delete this user?', `doDeleteUser(${id})`);
+}
+
+async function doDeleteUser(id) {
+    try {
+        await API.delete('/users/' + id);
+        showToast('User deleted', 'success');
+        loadUsers();
+    } catch (err) {
+        showToast('Failed to delete user', 'error');
+    }
+}
+
+// Global exports
+window.loadUsers = loadUsers;
+window.showAddUserModal = showAddUserModal;
+window.createUser = createUser;
+window.login = login;
+</script>

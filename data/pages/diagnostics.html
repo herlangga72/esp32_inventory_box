@@ -1,0 +1,51 @@
+<!-- Diagnostics Page -->
+<div class="card">
+    <div class="card-header">
+        System Status
+        <span id="diag-status-badge" class="badge badge-success">OK</span>
+    </div>
+    <div class="card-body no-padding">
+        <table class="table diag-table">
+            <tbody id="diagnostics-list">
+                <tr><td colspan="3" class="table-empty">Loading diagnostics...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-item">
+        <div class="stat-value" id="diag-uptime">--</div>
+        <div class="stat-label">Uptime</div>
+    </div>
+    <div class="stat-item">
+        <div class="stat-value" id="diag-total-errors">0</div>
+        <div class="stat-label">Total Errors</div>
+    </div>
+    <div class="stat-item">
+        <div class="stat-value" id="diag-last-error-status">--</div>
+        <div class="stat-label">Last Error</div>
+    </div>
+</div>
+
+<div class="card" style="margin-top:15px;">
+    <div class="card-header">Error Details</div>
+    <div class="card-body">
+        <p id="diag-last-error" style="color:var(--text-muted);">No errors</p>
+    </div>
+</div>
+
+<div class="restart-section">
+    <p>If the system is not responding or showing errors, you can restart it.</p>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:15px;">This will disconnect all active connections and reboot the device.</p>
+    <button class="btn-restart-large" onclick="restartSystem()">Restart System</button>
+</div>
+
+<script>
+function init_diagnostics() {
+    // Diagnostics data is already loaded by global loadDiagnostics()
+    // This page displays what loadDiagnostics() updates
+}
+
+window.init_diagnostics = init_diagnostics;
+</script>

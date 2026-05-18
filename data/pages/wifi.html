@@ -1,0 +1,198 @@
+<!-- WiFi Settings Page -->
+<div class="card">
+    <div class="card-header">Configure WiFi</div>
+    <div class="card-body">
+        <div class="form-group">
+            <label class="form-label">WiFi Network (SSID)</label>
+            <input type="text" class="form-input" id="wifi-ssid" placeholder="Enter network name">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" class="form-input" id="wifi-pass" placeholder="Enter password">
+        </div>
+        <div style="margin-top:15px;">
+            <button class="btn btn-primary" onclick="saveWifi()">Save & Connect</button>
+            <button class="btn" onclick="scanNetworks()">Scan Networks</button>
+        </div>
+    </div>
+</div>
+
+<div class="card" id="scan-results-card" style="display:none;">
+    <div class="card-header">
+        Available Networks
+        <button class="btn btn-sm" onclick="document.getElementById('scan-results-card').style.display='none'">Close</button>
+    </div>
+    <div class="card-body no-padding">
+        <div id="scan-results" class="table-empty">Scanning...</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Current Connection</div>
+    <div class="card-body">
+        <table>
+            <tr>
+                <td style="width:150px;color:var(--text-muted);">Status</td>
+                <td>
+                    <span class="wifi-status" id="wifi-status-display">
+                        <span class="wifi-icon">•</span>
+                        <span id="wifi-status-text">Checking...</span>
+                    </span>
+                </td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">SSID</td>
+                <td id="wifi-current-ssid">--</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">Signal Strength</td>
+                <td id="wifi-current-rssi">-- dBm</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">IP Address</td>
+                <td id="wifi-current-ip">--</td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Access Point Mode</div>
+    <div class="card-body">
+        <p style="margin-bottom:15px;color:var(--text-muted);">If WiFi connection fails, the device will create an access point for configuration.</p>
+        <table>
+            <tr>
+                <td style="width:150px;color:var(--text-muted);">AP SSID</td>
+                <td>Inventory-Box-Setup</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">AP Password</td>
+                <td>12345678</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">AP IP Address</td>
+                <td>192.168.4.1</td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<script>
+function init_wifi() {
+    loadWifiStatus();
+    
+    // Update WiFi status every 5 seconds
+    window.wifiInterval = setInterval(loadWifiStatus, 5000);
+}
+
+async function loadWifiStatus() {
+    try {
+        const data = await API.get('/wifi');
+        
+        const statusDisplay = document.getElementById('wifi-status-display');
+        const statusText = document.getElementById('wifi-status-text');
+        
+        if (data.connected) {
+            statusDisplay.classList.add('connected');
+            statusDisplay.classList.remove('disconnected');
+            statusText.textContent = 'Connected';
+            statusDisplay.querySelector('.wifi-icon').textContent = '✓';
+        } else if (data.apMode) {
+            statusDisplay.classList.add('disconnected');
+            statusDisplay.classList.remove('connected');
+            statusText.textContent = 'AP Mode';
+            statusDisplay.querySelector('.wifi-icon').textContent = '🔗';
+        } else {
+            statusDisplay.classList.add('disconnected');
+            statusDisplay.classList.remove('connected');
+            statusText.textContent = 'Disconnected';
+            statusDisplay.querySelector('.wifi-icon').textContent = '✗';
+        }
+        
+        document.getElementById('wifi-current-ssid').textContent = data.ssid || '--';
+        document.getElementById('wifi-current-rssi').textContent = data.rssi + ' dBm' || '--';
+        document.getElementById('wifi-current-ip').textContent = data.ip || '--';
+        
+    } catch (err) {
+        console.error('WiFi status failed:', err);
+    }
+}
+
+async function saveWifi() {
+    const ssid = document.getElementById('wifi-ssid').value.trim();
+    const pass = document.getElementById('wifi-pass').value;
+    
+    if (!ssid) {
+        showToast('Please enter SSID', 'warning');
+        return;
+    }
+    
+    try {
+        await API.post('/wifi', { ssid, password: pass });
+        showToast('WiFi settings saved. Reconnecting...', 'success');
+        
+        // Clear password field
+        document.getElementById('wifi-pass').value = '';
+        
+        // Wait for reconnect
+        setTimeout(loadWifiStatus, 3000);
+    } catch (err) {
+        showToast('Failed to save WiFi settings', 'error');
+    }
+}
+
+async function scanNetworks() {
+    const card = document.getElementById('scan-results-card');
+    const results = document.getElementById('scan-results');
+    
+    card.style.display = 'block';
+    results.innerHTML = '<div class="table-empty">Scanning for networks...</div>';
+    
+    try {
+        // Use the config portal scan endpoint
+        const res = await fetch('/scan');
+        const data = await res.json();
+        
+        if (!data.networks || data.networks.length === 0) {
+            results.innerHTML = '<div class="table-empty">No networks found</div>';
+            return;
+        }
+        
+        results.innerHTML = '<table class="table"><tbody>' +
+            data.networks.map(n => `
+                <tr style="cursor:pointer;" onclick="selectNetwork('${n.ssid}')">
+                    <td style="width:200px;">${n.ssid}</td>
+                    <td>${n.rssi} dBm</td>
+                    <td><button class="btn btn-sm">Select</button></td>
+                </tr>
+            `).join('') +
+            '</tbody></table>';
+        
+    } catch (err) {
+        console.error('Scan failed:', err);
+        results.innerHTML = '<div class="table-empty">Scan failed</div>';
+    }
+}
+
+function selectNetwork(ssid) {
+    document.getElementById('wifi-ssid').value = ssid;
+    document.getElementById('wifi-pass').focus();
+    document.getElementById('scan-results-card').style.display = 'none';
+    showToast(`Selected: ${ssid}`, 'info');
+}
+
+window.init_wifi = init_wifi;
+window.loadWifiStatus = loadWifiStatus;
+window.saveWifi = saveWifi;
+window.scanNetworks = scanNetworks;
+window.selectNetwork = selectNetwork;
+
+// Cleanup interval on page leave
+const originalNavigate = navigateTo;
+window.navigateTo = function(page) {
+    if (window.wifiInterval) {
+        clearInterval(window.wifiInterval);
+    }
+    originalNavigate(page);
+};
+</script>

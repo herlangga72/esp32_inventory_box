@@ -1,0 +1,164 @@
+<!-- Tools Management Page -->
+<div class="action-bar">
+    <div class="action-bar-left">
+        <button class="btn btn-primary" onclick="showAddToolModal()">+ Add Tool</button>
+    </div>
+    <div class="action-bar-right">
+        <button class="btn btn-refresh" onclick="loadTools()">Refresh</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Registered Tools</div>
+    <div class="card-body no-padding">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th style="width:60px;">ID</th>
+                    <th>Name</th>
+                    <th style="width:120px;">Weight (g)</th>
+                    <th style="width:80px;">Tolerance</th>
+                    <th style="width:80px;">Status</th>
+                    <th style="width:150px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="tools-table">
+                <tr><td colspan="6" class="table-empty">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function init_tools() {
+    loadTools();
+}
+
+async function loadTools() {
+    try {
+        const data = await API.get('/tools');
+        const tbody = document.getElementById('tools-table');
+        
+        if (!data.tools || data.tools.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No tools registered</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = data.tools.map(tool => `
+            <tr>
+                <td>${tool.id}</td>
+                <td>${tool.name}</td>
+                <td>${tool.weight.toFixed(1)}</td>
+                <td>±${tool.tolerance ? tool.tolerance.toFixed(1) : '2.0'}</td>
+                <td><span class="badge ${tool.active ? 'badge-success' : 'badge-muted'}">${tool.active ? 'Active' : 'Inactive'}</span></td>
+                <td>
+                    <button class="btn btn-sm" onclick="editTool(${tool.id}, '${tool.name}', ${tool.weight})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteTool(${tool.id})">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        console.error('Load tools failed:', err);
+        document.getElementById('tools-table').innerHTML = '<tr><td colspan="6" class="table-empty">Failed to load</td></tr>';
+    }
+}
+
+function showAddToolModal() {
+    showModal('Add New Tool', `
+        <div class="form-group">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-input" id="tool-name" placeholder="Tool name">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Weight (grams)</label>
+            <input type="number" class="form-input" id="tool-weight" step="0.1" placeholder="0.0">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Tolerance (grams)</label>
+            <input type="number" class="form-input" id="tool-tolerance" step="0.1" value="2.0" placeholder="2.0">
+        </div>
+    `, `
+        <button class="btn" onclick="hideModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="createTool()">Add Tool</button>
+    `);
+}
+
+async function createTool() {
+    const name = document.getElementById('tool-name').value.trim();
+    const weight = parseFloat(document.getElementById('tool-weight').value);
+    const tolerance = parseFloat(document.getElementById('tool-tolerance').value) || 2.0;
+    
+    if (!name || isNaN(weight)) {
+        showToast('Please fill all required fields', 'error');
+        return;
+    }
+    
+    try {
+        await API.post('/tools', { name, weight, tolerance });
+        hideModal();
+        showToast('Tool added', 'success');
+        loadTools();
+    } catch (err) {
+        showToast('Failed to add tool', 'error');
+    }
+}
+
+function editTool(id, name, weight) {
+    showModal('Edit Tool', `
+        <input type="hidden" id="edit-tool-id" value="${id}">
+        <div class="form-group">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-input" id="edit-tool-name" value="${name}">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Weight (grams)</label>
+            <input type="number" class="form-input" id="edit-tool-weight" step="0.1" value="${weight}">
+        </div>
+    `, `
+        <button class="btn" onclick="hideModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="updateTool()">Update</button>
+    `);
+}
+
+async function updateTool() {
+    const id = document.getElementById('edit-tool-id').value;
+    const name = document.getElementById('edit-tool-name').value.trim();
+    const weight = parseFloat(document.getElementById('edit-tool-weight').value);
+    
+    if (!name || isNaN(weight)) {
+        showToast('Please fill all fields', 'error');
+        return;
+    }
+    
+    try {
+        await API.put('/tools/' + id, { name, weight });
+        hideModal();
+        showToast('Tool updated', 'success');
+        loadTools();
+    } catch (err) {
+        showToast('Failed to update tool', 'error');
+    }
+}
+
+async function deleteTool(id) {
+    showConfirm('Delete Tool', 'Are you sure you want to delete this tool?', `doDeleteTool(${id})`);
+}
+
+async function doDeleteTool(id) {
+    try {
+        await API.delete('/tools/' + id);
+        showToast('Tool deleted', 'success');
+        loadTools();
+    } catch (err) {
+        showToast('Failed to delete tool', 'error');
+    }
+}
+
+// Make functions available globally
+window.loadTools = loadTools;
+window.showAddToolModal = showAddToolModal;
+window.createTool = createTool;
+window.editTool = editTool;
+window.updateTool = updateTool;
+window.deleteTool = deleteTool;
+</script>

@@ -1,0 +1,126 @@
+<!-- Dashboard Page -->
+<div class="status-cards">
+    <div class="status-card">
+        <div class="status-card-label">Current Weight</div>
+        <div class="status-card-value success" id="global-weight">-- g</div>
+        <div class="status-card-sub">Delta: <span id="global-delta">--</span></div>
+    </div>
+    <div class="status-card">
+        <div class="status-card-label">Baseline</div>
+        <div class="status-card-value" id="global-baseline">-- g</div>
+        <div class="status-card-sub">Reference</div>
+    </div>
+    <div class="status-card">
+        <div class="status-card-label">Box Contents</div>
+        <div class="status-card-value" id="global-contents">0</div>
+        <div class="status-card-sub">Items tracked</div>
+    </div>
+    <div class="status-card">
+        <div class="status-card-label">System State</div>
+        <div class="status-card-value" id="global-state">--</div>
+        <div class="status-card-sub">FSM state</div>
+    </div>
+</div>
+
+<div class="quick-actions">
+    <div class="quick-action" onclick="showCalibrateModal()">
+        <div class="quick-action-icon">⚖</div>
+        <span>Calibrate</span>
+    </div>
+    <div class="quick-action" onclick="navigateTo('tools'); showAddToolModal()">
+        <div class="quick-action-icon">+</div>
+        <span>Add Tool</span>
+    </div>
+    <div class="quick-action" onclick="refreshAll()">
+        <div class="quick-action-icon">↻</div>
+        <span>Refresh</span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Box Contents</div>
+    <div class="card-body">
+        <div class="contents-grid" id="contents-grid">
+            <div class="table-empty">No tools in box</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">System Info</div>
+    <div class="card-body">
+        <table>
+            <tr>
+                <td style="width:150px;color:var(--text-muted);">Uptime</td>
+                <td id="global-uptime">--</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">Free Heap</td>
+                <td id="global-heap">--</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">WiFi Signal</td>
+                <td id="global-rssi">-- dBm</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">IP Address</td>
+                <td id="global-ip">--</td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">FW Version</td>
+                <td>1.0.0</td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<script>
+function init_dashboard() {
+    // Refresh contents from status
+    loadContents();
+}
+
+async function loadContents() {
+    try {
+        const data = await API.get('/status');
+        const grid = document.getElementById('contents-grid');
+        
+        if (data.contentsList && data.contentsList.length > 0) {
+            grid.innerHTML = data.contentsList.map(item => `
+                <div class="content-item">
+                    <div class="content-item-name">${item.name}</div>
+                    <div class="content-item-weight">${item.weight.toFixed(1)} g</div>
+                </div>
+            `).join('');
+        } else {
+            grid.innerHTML = '<div class="table-empty">No tools in box</div>';
+        }
+    } catch (err) {
+        console.error('Load contents failed:', err);
+    }
+}
+
+function showCalibrateModal() {
+    showModal('Calibrate Scale', `
+        <p style="margin-bottom:15px;">Place the empty box on the scale, then click "Start Calibration".</p>
+        <p style="color:var(--text-muted);font-size:11px;">System will measure baseline weight.</p>
+    `, `
+        <button class="btn" onclick="hideModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="calibrate()">Start Calibration</button>
+    `);
+}
+
+async function calibrate() {
+    hideModal();
+    try {
+        const data = await API.post('/calibrate', {});
+        showToast(`Calibrated! Baseline: ${data.baseline.toFixed(2)} g`, 'success');
+        fetchStatus();
+    } catch (err) {
+        showToast('Calibration failed', 'error');
+    }
+}
+
+// Auto-refresh contents
+setInterval(loadContents, 5000);
+</script>

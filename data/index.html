@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Box - Management</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <!-- ERROR BANNER -->
+    <div class="error-banner" id="error-banner">
+        <div class="error-banner-content">
+            <span class="error-banner-icon">⚠</span>
+            <div>
+                <div class="error-banner-text" id="error-title">System Error Detected</div>
+                <div class="error-banner-details" id="error-details">Some components failed</div>
+            </div>
+        </div>
+        <div class="error-banner-actions">
+            <button class="error-banner-btn" onclick="navigateTo('diagnostics')">View Details</button>
+            <button class="error-banner-btn error-banner-btn-danger" onclick="restartSystem()">Restart</button>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>Inventory Box</h1>
+                <span>ESP32 Management</span>
+            </div>
+            
+            <div class="nav-section">System</div>
+            <nav class="sidebar-nav">
+                <a class="nav-item active" href="#" data-page="dashboard">
+                    <span class="status-dot-small" id="nav-status-dot"></span>Status
+                </a>
+                <a class="nav-item" href="#" data-page="tools">Tools</a>
+                <a class="nav-item" href="#" data-page="users">Users</a>
+                <a class="nav-item" href="#" data-page="logs">Logs</a>
+            </nav>
+            
+            <div class="nav-section">Settings</div>
+            <nav class="sidebar-nav">
+                <a class="nav-item" href="#" data-page="diagnostics">Diagnostics</a>
+                <a class="nav-item" href="#" data-page="config">Configuration</a>
+                <a class="nav-item" href="#" data-page="wifi">WiFi Settings</a>
+            </nav>
+        </aside>
+
+        <!-- MAIN -->
+        <main class="main-content">
+            <!-- TOPBAR -->
+            <header class="topbar">
+                <div class="topbar-left">
+                    <h2 id="page-title">System Status</h2>
+                    <div class="connection-status">
+                        <span class="status-dot" id="connection-dot"></span>
+                        <span id="connection-text">Connecting...</span>
+                    </div>
+                </div>
+                <div class="topbar-right">
+                    <span class="user-info">User: <strong id="user-display">Guest</strong></span>
+                    <button class="btn btn-restart" onclick="restartSystem()">Restart</button>
+                    <button class="btn btn-refresh" onclick="refreshAll()">Refresh</button>
+                </div>
+            </header>
+
+            <!-- CONTENT AREA (dynamically loaded) -->
+            <div class="content-area" id="content-area">
+                <div class="loading">Loading...</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- MODALS (shared) -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <div class="modal-header" id="modal-title">Modal</div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer" id="modal-footer"></div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/app.js"></script>
+    <script>
+        // Page router - loads content dynamically
+        let currentPage = 'dashboard';
+        
+        async function navigateTo(page) {
+            if (currentPage === page) return;
+            
+            currentPage = page;
+            
+            // Update nav active state
+            document.querySelectorAll('.nav-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.page === page);
+            });
+            
+            // Update page title
+            const titles = {
+                'dashboard': 'System Status',
+                'tools': 'Tool Management',
+                'users': 'User Management',
+                'logs': 'Event Logs',
+                'diagnostics': 'Diagnostics',
+                'config': 'Configuration',
+                'wifi': 'WiFi Settings'
+            };
+            document.getElementById('page-title').textContent = titles[page] || page;
+            
+            // Load content
+            const contentArea = document.getElementById('content-area');
+            contentArea.innerHTML = '<div class="loading">Loading...</div>';
+            
+            try {
+                const response = await fetch(`/pages/${page}.html`);
+                if (response.ok) {
+                    contentArea.innerHTML = await response.text();
+                    // Execute page-specific init
+                    if (typeof window['init_' + page] === 'function') {
+                        window['init_' + page]();
+                    }
+                } else {
+                    contentArea.innerHTML = '<div class="error-state">Page not found</div>';
+                }
+            } catch (err) {
+                contentArea.innerHTML = '<div class="error-state">Failed to load page</div>';
+            }
+        }
+        
+        // Event delegation for navigation
+        document.addEventListener('click', (e) => {
+            const navItem = e.target.closest('.nav-item');
+            if (navItem && navItem.dataset.page) {
+                e.preventDefault();
+                navigateTo(navItem.dataset.page);
+            }
+        });
+        
+        // Initialize dashboard on load
+        navigateTo('dashboard');
+    </script>
+</body>
+</html>
