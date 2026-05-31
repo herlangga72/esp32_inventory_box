@@ -1,7 +1,13 @@
 #include "PowerManager.h"
+#include "../utils/LogManager.h"
 #include "config/Config.h"
+#include <WiFi.h>
+#ifndef RELEASE_BUILD
+#include <ESPmDNS.h>
+#endif
 #include <esp_sleep.h>
 #include <esp_pm.h>
+#include "esp32/pm.h"
 #include <driver/gpio.h>
 
 // Static variables for deep sleep persistence
@@ -10,64 +16,75 @@ RTC_DATA_ATTR float savedBaseline = 0.0f;
 RTC_DATA_ATTR bool needRecalibration = false;
 
 PowerManager::PowerManager()
-    : currentState(POWER_ACTIVE), lastActivityTime(0),
+    : currentState(PM_ACTIVE), lastActivityTime(0),
       lightSleepThreshold(10000), deepSleepThreshold(60000),
-      pmConfigured(false) {}
+      pmConfigured(false), opMode(OperationalMode::OP_AP_FULL),
+      sleepAllowed(false) {}
 
-void PowerManager::begin() {
+void PowerManager::begin(bool setupWake) {
     lastActivityTime = millis();
-    
+
     // Check wake reason
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    
+
     switch (cause) {
         case ESP_SLEEP_WAKEUP_EXT0:
-            Serial.println("Woke from GPIO (MPU motion)");
+            LOG_INFO("POWER", "Woke from GPIO (MPU motion)");
             handleWakeFromMotion();
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
-            Serial.println("Woke from timer");
+            LOG_INFO("POWER", "Woke from timer");
             handleWakeFromTimer();
             break;
         case ESP_SLEEP_WAKEUP_UNDEFINED:
-            Serial.println("Cold boot");
+            LOG_INFO("POWER", "Cold boot");
             handleColdBoot();
             break;
         default:
-            Serial.println("Unknown wake reason");
+            LOG_INFO("POWER", "Unknown wake reason");
             break;
     }
-    
+
     wakeCount++;
-    
+
     // Configure power management
     configurePowerManagement();
-    
-    // Setup wake sources for deep sleep
-    setupWakeSources();
+
+    // Setup wake sources for deep sleep (skip if MPU6050 absent — GPIO35 floats)
+    if (setupWake) {
+        setupWakeSources();
+    }
 }
 
 void PowerManager::configurePowerManagement() {
-    if (!pmConfigured) {
-        esp_pm_config_esp32_t pm_config = {
-            .max_cpu_freq = ESP_PM_CPU_FREQ_240M,
-            .min_cpu_freq = ESP_PM_CPU_FREQ_80M,
-            .light_sleep_enable = true
-        };
-        
-        esp_err_t err = esp_pm_configure(&pm_config);
-        if (err == ESP_OK) {
-            pmConfigured = true;
-            Serial.println("Power management configured");
-        } else {
-            Serial.printf("PM config failed: %d\n", err);
-        }
+    if (pmConfigured) return;
+
+    esp_pm_config_esp32_t pm_cfg;
+    if (opMode == OperationalMode::OP_AP_FULL) {
+        pm_cfg.max_freq_mhz = 240;
+        pm_cfg.min_freq_mhz = 240;   // locked — no DFS in AP mode
+        pm_cfg.light_sleep_enable = false;
+    } else {
+        pm_cfg.max_freq_mhz = 240;
+        pm_cfg.min_freq_mhz = 80;    // DFS allowed in STA mode
+        pm_cfg.light_sleep_enable = true;
     }
+
+    esp_err_t err = esp_pm_configure(&pm_cfg);
+    if (err == ESP_OK) {
+        LOG_INFO("POWER", "PM: %s mode, min=%dMHz, light_sleep=%s",
+                 (opMode == OperationalMode::OP_AP_FULL ? "AP_FULL" : "STA_IDLE"),
+                 (int)pm_cfg.min_freq_mhz,
+                 pm_cfg.light_sleep_enable ? "ON" : "OFF");
+    } else {
+        LOG_WARN("POWER", "PM configure failed: %d", err);
+    }
+    pmConfigured = true;
 }
 
 void PowerManager::setupWakeSources() {
     // GPIO wake (MPU interrupt)
-    gpio_wakeup_enable(GPIO_NUM_35, GPIO_PIN_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(GPIO_NUM_35, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
     
     // Timer wake (5 min default)
@@ -77,81 +94,90 @@ void PowerManager::setupWakeSources() {
 void PowerManager::onActivity() {
     lastActivityTime = millis();
     
-    if (currentState == POWER_LIGHT_SLEEP) {
+    if (currentState == PM_LIGHT_SLEEP) {
         exitLightSleep();
-        currentState = POWER_ACTIVE;
+        currentState = PM_ACTIVE;
     }
 }
 
 void PowerManager::update() {
+    if (!sleepAllowed) {
+        // AP mode — never sleep, keep idle timer reset
+        lastActivityTime = millis();
+        return;
+    }
+
     unsigned long idleTime = millis() - lastActivityTime;
-    
+
     switch (currentState) {
-        case POWER_ACTIVE:
+        case PM_ACTIVE:
             if (idleTime > lightSleepThreshold) {
                 enterLightSleep();
-                currentState = POWER_LIGHT_SLEEP;
+                currentState = PM_LIGHT_SLEEP;
             }
             break;
-            
-        case POWER_LIGHT_SLEEP:
+
+        case PM_LIGHT_SLEEP:
             if (idleTime > deepSleepThreshold) {
                 enterDeepSleep();
             } else if (idleTime < lightSleepThreshold) {
                 exitLightSleep();
-                currentState = POWER_ACTIVE;
+                currentState = PM_ACTIVE;
             }
             break;
-            
-        case POWER_DEEP_SLEEP:
+
+        case PM_DEEP_SLEEP:
             // Waiting for wake
             break;
     }
 }
 
 void PowerManager::enterLightSleep() {
-    Serial.println("Entering light sleep...");
-    currentState = POWER_LIGHT_SLEEP;
+    LOG_INFO("POWER", "Entering light sleep...");
+    currentState = PM_LIGHT_SLEEP;
 }
 
 void PowerManager::exitLightSleep() {
-    Serial.println("Exiting light sleep...");
+    LOG_INFO("POWER", "Exiting light sleep...");
     lastActivityTime = millis();
 }
 
 void PowerManager::enterDeepSleep() {
-    if (currentState == POWER_DEEP_SLEEP) return;
+    if (currentState == PM_DEEP_SLEEP) return;
     
-    Serial.println("Entering deep sleep...");
+    LOG_INFO("POWER", "Entering deep sleep...");
     
     // Save state to RTC memory
     saveStateToRTC();
     
     // Disconnect WiFi to save power
+#ifndef RELEASE_BUILD
+    MDNS.end();
+#endif
     WiFi.disconnect();
     
     // Enter deep sleep
-    currentState = POWER_DEEP_SLEEP;
+    currentState = PM_DEEP_SLEEP;
     esp_deep_sleep_start();
 }
 
 void PowerManager::handleWakeFromMotion() {
-    currentState = POWER_ACTIVE;
+    currentState = PM_ACTIVE;
     lastActivityTime = millis();
 }
 
 void PowerManager::handleWakeFromTimer() {
-    currentState = POWER_ACTIVE;
+    currentState = PM_ACTIVE;
     lastActivityTime = millis();
     
     // Check if recalibration needed
     if (needRecalibration) {
-        Serial.println("Recalibration needed!");
+        LOG_INFO("POWER", "Recalibration needed!");
     }
 }
 
 void PowerManager::handleColdBoot() {
-    currentState = POWER_ACTIVE;
+    currentState = PM_ACTIVE;
     lastActivityTime = millis();
 }
 
@@ -163,7 +189,7 @@ void PowerManager::saveStateToRTC() {
 
 void PowerManager::restoreStateFromRTC() {
     currentBaseline = savedBaseline;
-    Serial.printf("Restored baseline: %.1f\n", currentBaseline);
+    LOG_INFO("POWER", "Restored baseline: %.1f", currentBaseline);
 }
 
 void PowerManager::setBaseline(float baseline) {
@@ -183,13 +209,32 @@ void PowerManager::setThresholds(unsigned long light, unsigned long deep) {
     deepSleepThreshold = deep;
 }
 
-// Idle hook for tickless operation
-void vApplicationIdleHook(void) {
-    // This is called when idle task runs
-    // ESP32 will enter light sleep automatically with tickless idle
-}
-
 // Get baseline (for restoration after deep sleep)
 float PowerManager::getBaseline() {
     return currentBaseline;
+}
+
+void PowerManager::setOperationalMode(OperationalMode mode) {
+    if (opMode == mode) return;
+    opMode = mode;
+    sleepAllowed = (mode == OperationalMode::OP_STA_IDLE);
+
+    // Reconfigure power management for new mode
+    pmConfigured = false;
+    configurePowerManagement();
+
+    if (mode == OperationalMode::OP_AP_FULL) {
+        if (currentState == PM_LIGHT_SLEEP) {
+            exitLightSleep();
+        }
+        currentState = PM_ACTIVE;
+        lastActivityTime = millis();
+    }
+    if (mode == OperationalMode::OP_STA_IDLE) {
+        lastActivityTime = millis(); // start sleep countdown fresh
+    }
+}
+
+bool PowerManager::isSleepAllowed() {
+    return sleepAllowed;
 }

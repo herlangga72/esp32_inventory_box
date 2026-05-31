@@ -80,6 +80,7 @@ float MatchingService::getMatchConfidence(Tool* tool, float delta) {
     if (!tool) return 0.0f;
     
     float diff = abs(delta - tool->weightGrams);
+    if (tool->toleranceGrams <= 0.001f) return -1.0f;
     float confidence = 1.0f - (diff / tool->toleranceGrams);
     return std::max(0.0f, std::min(1.0f, confidence));
 }

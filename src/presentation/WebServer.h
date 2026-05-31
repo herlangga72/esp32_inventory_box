@@ -12,6 +12,8 @@ class LogRepository;
 class WeightService;
 class WiFiManager;
 class SystemStatus;
+class AccessController;
+class ServerClient;
 
 class WebServerManager {
 public:
@@ -27,6 +29,8 @@ public:
     void setWeightService(WeightService* ws);
     void setWiFiManager(WiFiManager* wm);
     void setSystemStatus(SystemStatus* ss);
+    void setAccessController(AccessController* ac);
+    void setServerClient(ServerClient* sc);
     
     void notifyClients(const char* event, const char* data = nullptr);
 
@@ -41,7 +45,9 @@ private:
     WeightService* weightService;
     WiFiManager* wifiManager;
     SystemStatus* systemStatus;
-    
+    AccessController* accessController;
+    ServerClient* serverClient;
+
     // Route handlers
     void handleStatus();
     void handleTools();
@@ -50,6 +56,8 @@ private:
     void handleUserLogin();
     void handleUserLogout();
     void handleLogs();
+    void handleLogsDownload();
+    void handleLogsClear();
     void handleCalibrate();
     void handleConfig();
     void handleRoot();
@@ -57,7 +65,16 @@ private:
     void handleRestart();
     void handleWiFiStatus();
     void handleWiFiConfig();
-    
+    void handleUserDelete();
+    void handleWiFiScan();
+
+    // Access control
+    void handleAccessStatus();
+    void handleAccessServerConfig();
+    void handleFingerprintEnroll();
+    void handleFingerprintDelete();
+    void handleDoorControl();
+
     // Helpers
     void sendJson(const String& json);
     void sendError(int code, const char* message);

@@ -6,6 +6,7 @@
 #include "../../data/LogRepository.h"
 #include "../events/Events.h"
 #include "config/Config.h"
+#include "../../utils/LogManager.h"
 
 StateManager::StateManager(EventBus* events)
     : events(events), weightService(nullptr), motionService(nullptr),
@@ -13,6 +14,7 @@ StateManager::StateManager(EventBus* events)
 
 void StateManager::begin() {
     boxState.state = BoxStateMachine::INIT;
+    matchingService.setToolRepository(toolRepo);
     transition(BoxStateMachine::IDLE);
 }
 
@@ -20,7 +22,7 @@ void StateManager::update() {
     // Monitor weight changes
     if (weightService && boxState.state == BoxStateMachine::IDLE) {
         float delta = weightService->getDelta();
-        if (abs(delta) > WEIGHT_THRESHOLD_GRAMS) {
+        if (abs(delta) > Config::WEIGHT_THRESHOLD_GRAMS) {
             onWeightChange(delta);
         }
     }
@@ -36,6 +38,7 @@ void StateManager::setMotionService(MotionService* ms) {
 
 void StateManager::setToolRepository(ToolRepository* tr) {
     toolRepo = tr;
+    matchingService.setToolRepository(tr);
 }
 
 void StateManager::setLogRepository(LogRepository* lr) {
@@ -45,7 +48,7 @@ void StateManager::setLogRepository(LogRepository* lr) {
 void StateManager::onWeightChange(float delta) {
     switch (boxState.state) {
         case BoxStateMachine::IDLE:
-            if (abs(delta) > WEIGHT_THRESHOLD_GRAMS) {
+            if (abs(delta) > Config::WEIGHT_THRESHOLD_GRAMS) {
                 transition(BoxStateMachine::ANALYZING);
             }
             break;
@@ -55,7 +58,7 @@ void StateManager::onWeightChange(float delta) {
             break;
             
         case BoxStateMachine::TOOL_PLACED:
-            if (delta < -WEIGHT_THRESHOLD_GRAMS) {
+            if (delta < -Config::WEIGHT_THRESHOLD_GRAMS) {
                 transition(BoxStateMachine::REMOVING);
             }
             break;
@@ -72,10 +75,7 @@ void StateManager::onMotionDetected(MotionType motion) {
             // Try to match weight
             if (weightService && toolRepo) {
                 float delta = weightService->getDelta();
-                MatchingService matcher;
-                matcher.setToolRepository(toolRepo);
-                
-                Tool* matched = matcher.matchByWeight(delta);
+                Tool* matched = matchingService.matchByWeight(delta);
                 if (matched) {
                     onToolMatched(matched->id);
                 } else {
@@ -222,8 +222,7 @@ void StateManager::setCurrentUserId(int userId) {
 
 void StateManager::transition(BoxStateMachine newState) {
     if (!isValidTransition(boxState.state, newState)) {
-        Serial.printf("Invalid state transition: %d -> %d\n", 
-            (int)boxState.state, (int)newState);
+        LOG_INFO("STATE", "Invalid state transition: %d -> %d\n", (int)boxState.state, (int)newState);
         return;
     }
     
@@ -239,7 +238,7 @@ void StateManager::transition(BoxStateMachine newState) {
     event.data.state.toState = (int)newState;
     events->publish(event);
     
-    Serial.printf("State: %d -> %d\n", (int)oldState, (int)newState);
+    LOG_INFO("STATE", "State: %d -> %d\n", (int)oldState, (int)newState);
 }
 
 bool StateManager::isValidTransition(BoxStateMachine from, BoxStateMachine to) {
@@ -269,17 +268,9 @@ bool StateManager::isValidTransition(BoxStateMachine from, BoxStateMachine to) {
 }
 
 void StateManager::logStateEvent(const char* event) {
-    if (logRepo) {
-        LogEntry entry;
-        entry.timestamp = millis();
-        entry.userId = boxState.currentUserId;
-        strncpy(entry.event, event, sizeof(entry.event) - 1);
-        
-        if (weightService) {
-            entry.weightGrams = weightService->getCurrentWeight();
-            entry.deltaGrams = weightService->getDelta();
-        }
-        
-        logRepo->log(entry);
-    }
+    // Log via RTOS queue → Serial + SPIFFS file
+    float w = weightService ? weightService->getCurrentWeight() : 0;
+    float d = weightService ? weightService->getDelta() : 0;
+    LOG_INFO("STATE", "%s uid=%d w=%.1f d=%.1f",
+        event, boxState.currentUserId, w, d);
 }

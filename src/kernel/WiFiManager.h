@@ -25,12 +25,19 @@ public:
 private:
     WebServer* configPortal;
     bool apMode;
+    bool staWasConnected;   // track STA drop for reconnection
+    bool reconnecting;      // in-progress reconnect attempt
+    unsigned long lastStaCheck;
+    unsigned long reconnectStart;
     unsigned long connectionStart;
     unsigned long connectionTimeout;
-    
+
+    bool connectSTA();
     void startConfigPortal();
-    void handleConfigPortal();
     void stopConfigPortal();
+    static void wifiEventCb(WiFiEvent_t event);
+    static bool staConnected;
+    static bool staTimedOut;
     
     // Captive portal handlers
     void handleRoot();

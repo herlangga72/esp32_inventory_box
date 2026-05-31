@@ -1,0 +1,481 @@
+<!-- Access Control Page -->
+<div class="status-cards">
+    <div class="status-card">
+        <div class="status-card-label">Access State</div>
+        <div class="status-card-value" id="access-state">idle</div>
+        <div class="status-card-sub" id="access-last-event">--</div>
+    </div>
+    <div class="status-card">
+        <div class="status-card-label">Door</div>
+        <div class="status-card-value" id="access-door-state">--</div>
+        <div class="status-card-sub" id="access-door-detail">--</div>
+    </div>
+    <div class="status-card">
+        <div class="status-card-label">Server</div>
+        <div class="status-card-value" id="access-server-status">--</div>
+        <div class="status-card-sub" id="access-server-detail">--</div>
+    </div>
+    <div class="status-card">
+        <div class="status-card-label">Last Fingerprint</div>
+        <div class="status-card-value" id="access-last-fp">--</div>
+        <div class="status-card-sub" id="access-fallback-status">Local fallback: --</div>
+    </div>
+</div>
+
+<div class="quick-actions">
+    <div class="quick-action" id="qa-unlock" onclick="accessUnlock()">
+        <div class="quick-action-icon">🔓</div>
+        <span>Unlock</span>
+    </div>
+    <div class="quick-action" onclick="accessRefresh()">
+        <div class="quick-action-icon">↻</div>
+        <span>Refresh</span>
+    </div>
+</div>
+
+<!-- ENROLLMENT PANEL -->
+<div class="card">
+    <div class="card-header">Fingerprint Enrollment</div>
+    <div class="card-body">
+        <div id="enroll-status">
+            <p style="color:var(--text-muted);margin-bottom:15px;">Assign a fingerprint slot to a sensor template. Place finger when prompted.</p>
+
+            <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
+                <div>
+                    <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">Fingerprint ID (1-127)</label>
+                    <input type="number" id="enroll-fp-id" min="1" max="127" value="1" style="width:100px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);">
+                </div>
+                <button class="btn btn-primary" id="btn-enroll-start" onclick="accessEnroll()">Start Enrollment</button>
+                <button class="btn" id="btn-enroll-cancel" onclick="accessEnrollCancel()" style="display:none;">Cancel</button>
+            </div>
+
+            <div id="enroll-progress" style="margin-top:12px;display:none;">
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <span style="font-size:12px;" id="enroll-message">Place finger on sensor...</span>
+                </div>
+                <div style="background:var(--border-light);border-radius:3px;height:6px;margin-top:8px;overflow:hidden;">
+                    <div id="enroll-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.5s;"></div>
+                </div>
+            </div>
+
+            <div id="enroll-result" style="margin-top:10px;display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- SERVER CONFIG -->
+<div class="card">
+    <div class="card-header">Server Configuration</div>
+    <div class="card-body">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+            <div style="flex:1;min-width:200px;">
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">Server URL</label>
+                <input type="text" id="cfg-server-url" placeholder="http://192.168.1.100:3000" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);">
+            </div>
+            <div style="flex:1;min-width:200px;">
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">Auth Token</label>
+                <input type="password" id="cfg-server-token" placeholder="Bearer token (optional)" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);">
+            </div>
+            <div>
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">&nbsp;</label>
+                <button class="btn btn-primary" onclick="accessSaveServer()">Save</button>
+                <button class="btn" onclick="accessTestServer()">Test</button>
+            </div>
+        </div>
+        <div style="margin-top:12px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                <input type="checkbox" id="cfg-local-fallback" checked onchange="accessSaveFallback(this.checked)">
+                <span style="font-size:13px;">Local fallback — allow access when server unreachable (uses user→fingerprint mapping)</span>
+            </label>
+        </div>
+    </div>
+</div>
+
+<!-- USER-FINGERPRINT MAPPING -->
+<div class="card">
+    <div class="card-header">User → Fingerprint Mapping</div>
+    <div class="card-body">
+        <div class="table-empty" id="access-user-mapping">Loading users...</div>
+    </div>
+</div>
+
+<!-- ACCESS LOG -->
+<div class="card">
+    <div class="card-header">
+        Access Log
+        <div style="display:flex;gap:6px;">
+            <button class="btn" onclick="accessLoadLogs()" style="font-size:11px;padding:4px 10px;">Refresh</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div style="overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:80px;">Decision</th>
+                        <th style="width:60px;">FP ID</th>
+                        <th>User</th>
+                        <th>Reason</th>
+                        <th style="width:140px;">Time</th>
+                    </tr>
+                </thead>
+                <tbody id="access-log-table">
+                    <tr><td colspan="5" class="table-empty">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="access-log-dropped" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
+    </div>
+</div>
+
+<script>
+let accessPollInterval = null;
+
+function init_access() {
+    accessLoadConfig();
+    accessLoadUsers();
+    accessLoadLogs();
+
+    if (accessPollInterval) clearInterval(accessPollInterval);
+    accessPollInterval = setInterval(accessRefresh, 2000);
+}
+
+async function accessRefresh() {
+    try {
+        const data = await API.get('/access/status');
+
+        // State
+        const stateEl = document.getElementById('access-state');
+        stateEl.textContent = data.state || '--';
+        stateEl.className = 'status-card-value';
+        if (data.state === 'granted' || data.state === 'unlocking' || data.state === 'unlocked') {
+            stateEl.classList.add('success');
+        } else if (data.state === 'denied') {
+            stateEl.classList.add('error');
+        }
+
+        // Door state
+        let doorState = 'unknown';
+        let doorDetail = '';
+        if (data.state === 'locked' || data.state === 'idle' || data.state === 'scanning') {
+            doorState = 'Locked';
+            doorDetail = 'Waiting for fingerprint';
+        } else if (data.state === 'unlocking') {
+            doorState = 'Unlocking...';
+            doorDetail = 'Relay active';
+        } else if (data.state === 'unlocked') {
+            doorState = 'Unlocked';
+            doorDetail = 'Door can be opened';
+        } else if (data.state === 'locking') {
+            doorState = 'Locking...';
+            doorDetail = 'Relay deactivated';
+        }
+
+        const doorStateEl = document.getElementById('access-door-state');
+        doorStateEl.textContent = doorState;
+        doorStateEl.className = 'status-card-value';
+        if (doorState === 'Unlocked' || doorState === 'Unlocking...') {
+            doorStateEl.classList.add('success');
+        }
+        document.getElementById('access-door-detail').textContent = doorDetail;
+
+        // Server status
+        const serverStatusEl = document.getElementById('access-server-status');
+        const serverDetailEl = document.getElementById('access-server-detail');
+        if (data.serverStatus === 0) {
+            serverStatusEl.textContent = 'Online';
+            serverStatusEl.className = 'status-card-value success';
+            serverDetailEl.textContent = data.serverLatency + 'ms';
+        } else if (data.serverStatus === 1) {
+            serverStatusEl.textContent = 'Offline';
+            serverStatusEl.className = 'status-card-value error';
+            serverDetailEl.textContent = formatUptime(data.serverFailDuration);
+        } else {
+            serverStatusEl.textContent = 'Not Configured';
+            serverStatusEl.className = 'status-card-value';
+            serverDetailEl.textContent = 'Set server URL below';
+        }
+
+        // Last fingerprint
+        document.getElementById('access-last-fp').textContent = data.lastFpId > 0 ? '#' + data.lastFpId : '--';
+        document.getElementById('access-fallback-status').textContent = 'Local fallback: ' + (data.localFallback ? 'ON' : 'OFF');
+
+        // Last event
+        document.getElementById('access-last-event').textContent = data.lastEvent || '--';
+
+    } catch (err) {
+        console.error('Access status fetch failed:', err);
+    }
+}
+
+// ---- Enrollment ----
+
+async function accessEnroll() {
+    const fpId = parseInt(document.getElementById('enroll-fp-id').value);
+    if (!fpId || fpId < 1 || fpId > 127) {
+        showToast('Enter a valid fingerprint ID (1-127)', 'error');
+        return;
+    }
+
+    try {
+        const data = await API.post('/fingerprint/enroll', { fpId });
+
+        if (data.success) {
+            document.getElementById('btn-enroll-start').style.display = 'none';
+            document.getElementById('btn-enroll-cancel').style.display = 'inline-block';
+            document.getElementById('enroll-progress').style.display = 'block';
+            document.getElementById('enroll-result').style.display = 'none';
+            document.getElementById('enroll-message').textContent = 'Place finger on sensor...';
+            document.getElementById('enroll-bar').style.width = '25%';
+
+            accessPollEnroll();
+        } else {
+            showToast('Enrollment failed to start', 'error');
+        }
+    } catch (err) {
+        showToast('Enrollment error: ' + err.message, 'error');
+    }
+}
+
+function accessEnrollCancel() {
+    // Just stop polling — controller doesn't have explicit cancel endpoint yet
+    document.getElementById('btn-enroll-start').style.display = 'inline-block';
+    document.getElementById('btn-enroll-cancel').style.display = 'none';
+    document.getElementById('enroll-progress').style.display = 'none';
+    showToast('Enrollment cancelled', 'info');
+}
+
+async function accessPollEnroll() {
+    try {
+        const data = await API.get('/fingerprint/enroll/status');
+
+        if (data.stepName === 'waiting') {
+            document.getElementById('enroll-message').textContent = 'Place finger on sensor...';
+            document.getElementById('enroll-bar').style.width = '25%';
+            setTimeout(accessPollEnroll, 500);
+        } else if (data.stepName === 'second_capture') {
+            document.getElementById('enroll-message').textContent = 'Remove finger, then place again...';
+            document.getElementById('enroll-bar').style.width = '60%';
+            setTimeout(accessPollEnroll, 500);
+        } else if (data.stepName === 'complete') {
+            document.getElementById('enroll-message').textContent = 'Fingerprint enrolled!';
+            document.getElementById('enroll-bar').style.width = '100%';
+            document.getElementById('enroll-result').style.display = 'block';
+            document.getElementById('enroll-result').innerHTML =
+                '<span style="color:var(--success);font-size:12px;">Fingerprint #' + data.fpId + ' enrolled successfully!</span>';
+            document.getElementById('btn-enroll-start').style.display = 'inline-block';
+            document.getElementById('btn-enroll-cancel').style.display = 'none';
+            showToast('Fingerprint #' + data.fpId + ' enrolled', 'success');
+            accessLoadUsers();
+        } else if (data.stepName === 'failed') {
+            document.getElementById('enroll-message').textContent = 'Enrollment failed';
+            document.getElementById('enroll-bar').style.width = '0%';
+            document.getElementById('enroll-result').style.display = 'block';
+            document.getElementById('enroll-result').innerHTML =
+                '<span style="color:var(--danger);font-size:12px;">Enrollment failed — try again</span>';
+            document.getElementById('btn-enroll-start').style.display = 'inline-block';
+            document.getElementById('btn-enroll-cancel').style.display = 'none';
+            showToast('Enrollment failed', 'error');
+        } else {
+            // idle — not enrolling
+            document.getElementById('btn-enroll-start').style.display = 'inline-block';
+            document.getElementById('btn-enroll-cancel').style.display = 'none';
+            document.getElementById('enroll-progress').style.display = 'none';
+        }
+    } catch (err) {
+        console.error('Enroll poll error:', err);
+        setTimeout(accessPollEnroll, 1000);
+    }
+}
+
+// ---- Server Config ----
+
+async function accessLoadConfig() {
+    try {
+        const data = await API.get('/access/server');
+        document.getElementById('cfg-server-url').value = data.serverUrl || '';
+        document.getElementById('cfg-server-token').value = '';
+        document.getElementById('cfg-local-fallback').checked = data.localFallback !== false;
+    } catch (err) {
+        console.error('Load server config failed:', err);
+    }
+}
+
+async function accessSaveServer() {
+    const url = document.getElementById('cfg-server-url').value.trim();
+    const token = document.getElementById('cfg-server-token').value.trim();
+
+    try {
+        await API.post('/access/server', {
+            serverUrl: url,
+            serverToken: token,
+            localFallback: document.getElementById('cfg-local-fallback').checked
+        });
+        showToast('Server config saved. Restart may be required.', 'success');
+    } catch (err) {
+        showToast('Save failed: ' + err.message, 'error');
+    }
+}
+
+async function accessSaveFallback(enabled) {
+    try {
+        await API.post('/access/server', {
+            serverUrl: document.getElementById('cfg-server-url').value.trim(),
+            serverToken: '',
+            localFallback: enabled
+        });
+        showToast('Local fallback ' + (enabled ? 'enabled' : 'disabled'), 'success');
+    } catch (err) {
+        // silent
+    }
+}
+
+async function accessTestServer() {
+    const url = document.getElementById('cfg-server-url').value.trim();
+    if (!url) {
+        showToast('Enter server URL first', 'warning');
+        return;
+    }
+    showToast('Testing connection...', 'info');
+    try {
+        const data = await API.post('/access/server', {
+            serverUrl: url,
+            serverToken: document.getElementById('cfg-server-token').value.trim(),
+            localFallback: document.getElementById('cfg-local-fallback').checked
+        });
+        showToast('Config saved. Check server status indicator above.', 'success');
+        accessRefresh();
+    } catch (err) {
+        showToast('Test failed: ' + err.message, 'error');
+    }
+}
+
+// ---- Door Control ----
+
+async function accessUnlock() {
+    try {
+        const data = await API.post('/door/unlock');
+        if (data.success) {
+            showToast('Door unlocking...', 'success');
+            accessRefresh();
+        } else {
+            showToast('Unlock failed — door may be busy', 'warning');
+        }
+    } catch (err) {
+        showToast('Unlock failed: ' + err.message, 'error');
+    }
+}
+
+// ---- User Mapping ----
+
+async function accessLoadUsers() {
+    try {
+        const data = await API.get('/users');
+        const el = document.getElementById('access-user-mapping');
+
+        if (!data.users || data.users.length === 0) {
+            el.innerHTML = '<div class="table-empty">No users configured</div>';
+            return;
+        }
+
+        el.innerHTML = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Status</th>
+                        <th>Fingerprint ID</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.users.map(u => `
+                        <tr>
+                            <td>${u.name || 'User #' + u.id}</td>
+                            <td>
+                                <span class="badge badge-${u.active ? 'success' : 'danger'}">${u.active ? 'Active' : 'Inactive'}</span>
+                            </td>
+                            <td>
+                                ${u.fpId > 0
+                                    ? '<span style="color:var(--success);">#' + u.fpId + '</span>'
+                                    : '<span style="color:var(--text-muted);">Not assigned</span>'}
+                            </td>
+                            <td>
+                                <button class="btn" onclick="accessDeleteFingerprint(${u.fpId})" ${u.fpId <= 0 ? 'disabled' : ''} style="font-size:11px;padding:2px 8px;">
+                                    ${u.fpId > 0 ? 'Delete FP #' + u.fpId : '--'}
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+    } catch (err) {
+        console.error('Load users failed:', err);
+    }
+}
+
+async function accessDeleteFingerprint(fpId) {
+    if (!fpId || fpId <= 0) return;
+    if (!confirm('Delete fingerprint #' + fpId + ' from sensor?')) return;
+
+    try {
+        await API.post('/fingerprint/delete', { fpId });
+        showToast('Fingerprint #' + fpId + ' deleted', 'success');
+        accessLoadUsers();
+        accessRefresh();
+    } catch (err) {
+        showToast('Delete failed: ' + err.message, 'error');
+    }
+}
+
+// ---- Logs ----
+
+async function accessLoadLogs() {
+    try {
+        const data = await API.get('/logs?limit=30&offset=0');
+        const tbody = document.getElementById('access-log-table');
+
+        if (!data.logs || data.logs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No access events yet</td></tr>';
+        } else {
+            // Filter for access-related tags
+            const accessLogs = data.logs.filter(l =>
+                l.tag === 'ACCESS' || l.tag === 'DOOR' || l.tag === 'FINGERPRINT' || l.tag === 'SERVER'
+            );
+
+            if (accessLogs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No access events yet</td></tr>';
+            } else {
+                tbody.innerHTML = accessLogs.map(l => {
+                    const badgeClass = l.msg && l.msg.indexOf('GRANTED') >= 0 ? 'success' :
+                        l.msg && (l.msg.indexOf('DENIED') >= 0 || l.msg.indexOf('UNREACHABLE') >= 0) ? 'danger' :
+                        l.msg && l.msg.indexOf('LOCAL') >= 0 ? 'warning' : '';
+                    const decision = l.msg ? l.msg.split(' ')[0] : l.tag;
+                    return `
+                        <tr>
+                            <td>
+                                <span class="badge badge-${badgeClass || 'info'}">${decision}</span>
+                            </td>
+                            <td style="color:var(--text-muted);">${l.msg || '--'}</td>
+                            <td>${l.userId || '--'}</td>
+                            <td style="font-size:12px;color:var(--text-secondary);">${l.msg || l.tag}</td>
+                            <td style="font-size:11px;color:var(--text-muted);">${formatDate(l.ts)}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        document.getElementById('access-log-dropped').textContent =
+            data.dropped > 0 ? data.dropped + ' log entries dropped (queue full)' : '';
+
+    } catch (err) {
+        console.error('Load logs failed:', err);
+    }
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (accessPollInterval) clearInterval(accessPollInterval);
+});
+</script>

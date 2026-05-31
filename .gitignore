@@ -1,0 +1,37 @@
+# PlatformIO build output
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Python virtualenv
+.venv/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Claude / AI tooling
+.claude/
+CLAUDE.md
+.ruflo/
+.ruvector/
+.claude-flow/
+.ruvllm/
+
+# Graphify output
+graphify-out/
+
+# AgentDB / RVF dump files
+agentdb.rvf
+agentdb.rvf.lock
+ruvector.db
+
+# Makefile (not part of PlatformIO build)
+Makefile

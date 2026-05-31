@@ -3,15 +3,18 @@
 
 #include <Arduino.h>
 #include <vector>
+#include "../config/Config.h"
 
 enum class BootStage {
-    STORAGE,
-    HX711,
-    MPU6050,
-    DISPLAY,
-    WIFI,
-    WEB_SERVER,
-    COMPLETE
+    BS_STORAGE,
+    BS_HX711,
+    BS_MPU6050,
+    BS_DISPLAY,
+    BS_WIFI,
+    BS_WEB_SERVER,
+    BS_FINGERPRINT,
+    BS_ACCESS_SERVER,
+    BS_COMPLETE
 };
 
 enum class ComponentStatus {
@@ -63,12 +66,17 @@ public:
     void setBootComplete();
     bool isBootComplete();
     
+    // Operational mode (AP full-speed vs STA power-save)
+    void setOperationalMode(OperationalMode mode);
+    OperationalMode getOperationalMode();
+
     // Error recovery
     void clearErrors();
     void resetComponent(const char* component);
 
 private:
-    SystemStatus() : bootComplete(false), bootStart(0), currentStage(BootStage::STORAGE) {}
+    SystemStatus() : bootComplete(false), bootStart(0), currentStage(BootStage::BS_STORAGE),
+                     currentOpMode(OperationalMode::OP_AP_FULL) {}
     
     std::vector<ComponentInfo> components;
     String lastError;
@@ -76,6 +84,7 @@ private:
     bool bootComplete;
     unsigned long bootStart;
     BootStage currentStage;
+    OperationalMode currentOpMode;
     
     ComponentInfo* findComponent(const char* name);
     void ensureComponent(const char* name);

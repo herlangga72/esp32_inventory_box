@@ -6,6 +6,7 @@
             <span>Enter PIN:</span>
             <input type="password" class="form-input form-input-sm" id="login-pin" maxlength="4" placeholder="----">
             <button class="btn btn-primary" onclick="login()">Login</button>
+            <button class="btn" onclick="logout()" style="margin-left:5px;">Logout</button>
         </div>
     </div>
 </div>
@@ -130,6 +131,17 @@ async function createUser() {
 
 async function deleteUser(id) {
     showConfirm('Delete User', 'Are you sure you want to delete this user?', `doDeleteUser(${id})`);
+}
+
+async function logout() {
+    try {
+        await API.post('/users/logout');
+        document.getElementById('user-display').textContent = 'Not logged in';
+        document.getElementById('login-pin').value = '';
+        showToast('Logged out', 'success');
+    } catch (err) {
+        showToast('Logout failed', 'error');
+    }
 }
 
 async function doDeleteUser(id) {

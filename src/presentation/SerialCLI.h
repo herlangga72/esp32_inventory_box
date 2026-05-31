@@ -19,6 +19,7 @@ private:
     void cmdTools();
     void cmdUsers();
     void cmdLogs();
+    void cmdLogLevel(const String& arg);
     void cmdReboot();
     void cmdWifi();
     void cmdMemory();

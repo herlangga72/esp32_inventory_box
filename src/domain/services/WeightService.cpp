@@ -6,7 +6,7 @@ WeightService::WeightService(HX711Driver* driver)
     : hx711(driver), filterIndex(0), filterSum(0),
       baseline(0), currentWeight(0), previousWeight(0),
       calibrationFactor(Config::CALIBRATION_FACTOR),
-      calibrating(false), calibrationSamples(0), calibrationSum(0) {
+      calibrating(false), calibrationSamples(0), totalCalSamples(0), calibrationSum(0) {
     memset(readings, 0, sizeof(readings));
 }
 
@@ -30,16 +30,34 @@ float WeightService::applyMovingAverage(int32_t raw) {
     filterSum += readings[filterIndex];
     
     // Advance index
-    filterIndex = (filterIndex + 1) % FILTER_SIZE;
+    filterIndex = (filterIndex + 1) % Config::FILTER_SIZE;
     
     // Return average
-    return filterSum / FILTER_SIZE;
+    return filterSum / Config::FILTER_SIZE;
 }
 
 void WeightService::onRawReading(int32_t raw) {
     previousWeight = currentWeight;
     currentWeight = applyMovingAverage(raw);
-    
+
+    // Calibration mode: accumulate samples until the requested count is reached
+    if (calibrating && calibrationSamples > 0) {
+        calibrationSum += currentWeight;
+        calibrationSamples--;
+        if (calibrationSamples == 0) {
+            baseline = calibrationSum / totalCalSamples;
+            calibrating = false;
+
+            // Publish calibration complete event
+            EventPayload event;
+            event.type = DomainEvent::CALIBRATION_COMPLETE;
+            event.timestamp = millis();
+            event.data.generic.value = baseline;
+            EventBus::getInstance()->publish(event);
+        }
+        return;  // don't publish WEIGHT_UPDATED during calibration
+    }
+
     processWeight();
 }
 
@@ -56,7 +74,7 @@ void WeightService::processWeight() {
     EventBus::getInstance()->publish(event);
     
     // Check for significant change
-    if (abs(delta) > WEIGHT_THRESHOLD_GRAMS) {
+    if (abs(delta) > Config::WEIGHT_THRESHOLD_GRAMS) {
         EventPayload changeEvent;
         changeEvent.type = DomainEvent::WEIGHT_CHANGE_SIGNIFICANT;
         changeEvent.timestamp = millis();
@@ -85,6 +103,7 @@ void WeightService::setBaseline(float newBaseline) {
 void WeightService::startCalibration(int samples) {
     calibrating = true;
     calibrationSamples = samples;
+    totalCalSamples = samples;
     calibrationSum = 0;
 }
 
@@ -93,12 +112,14 @@ bool WeightService::isCalibrating() {
 }
 
 bool WeightService::isCalibrationComplete() {
-    return calibrating && calibrationSamples == 0;
+    return !calibrating && totalCalSamples > 0 && calibrationSamples == 0;
 }
 
 float WeightService::getCalibrationResult() {
     if (calibrationSum == 0) return baseline;
-    return calibrationSum / (50 - calibrationSamples);
+    int collected = totalCalSamples - calibrationSamples;
+    if (collected <= 0) return baseline;
+    return calibrationSum / collected;
 }
 
 void WeightService::tare() {

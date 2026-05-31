@@ -1,80 +1,139 @@
 #include "WiFiManager.h"
-#include "StorageManager.h"
-#include "Logger.h"
+#include <SPIFFS.h>
+#include <esp_wifi.h>
+#include "../data/StorageManager.h"
+#include "../utils/LogManager.h"
+#include "../utils/JsonBuilder.h"
+#include "../utils/JsonParser.h"
+#include "SystemStatus.h"
+#include "PowerManager.h"
+#include "../hal/InterruptManager.h"
 
 extern StorageManager storage;
+extern PowerManager powerManager;
 
 const char* CONFIG_AP_SSID = "Inventory-Box-Setup";
 const char* CONFIG_AP_PASS = "12345678";
 const IPAddress CONFIG_AP_IP(192, 168, 4, 1);
 
-WiFiManager::WiFiManager()
-    : configPortal(nullptr), apMode(false), 
-      connectionStart(0), connectionTimeout(15000) {}
+bool WiFiManager::staConnected = false;
+bool WiFiManager::staTimedOut = false;
 
-void WiFiManager::begin() {
-    configPortal = new WebServer(CONFIG_AP_IP, 80);
-    
-    // Check for stored credentials
-    if (!hasStoredCredentials()) {
-        Serial.println("[WiFi] No credentials stored, starting config portal...");
-        startConfigPortal();
-        return;
+WiFiManager::WiFiManager()
+    : configPortal(nullptr), apMode(false),
+      staWasConnected(false), reconnecting(false), lastStaCheck(0),
+      reconnectStart(0), connectionStart(0), connectionTimeout(15000) {}
+
+void WiFiManager::wifiEventCb(WiFiEvent_t event) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            staConnected = true;
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            staTimedOut = true;
+            break;
+        default:
+            break;
     }
-    
-    // Try to connect
+}
+
+bool WiFiManager::connectSTA() {
     String ssid = storage.getString("wifi_ssid", "");
     String pass = storage.getString("wifi_pass", "");
-    
-    Serial.print("[WiFi] Connecting to: ");
-    Serial.println(ssid);
-    
+    if (ssid.length() == 0) return false;
+
+    LOG_INFO("WIFI", "Connecting to %s...", ssid.c_str());
+
+    staConnected = false;
+    staTimedOut = false;
+    WiFi.onEvent(wifiEventCb);
+
+    WiFi.mode(WIFI_OFF);
+    delay(200);
     WiFi.mode(WIFI_STA);
+    delay(200);
     WiFi.begin(ssid.c_str(), pass.c_str());
-    
-    connectionStart = millis();
-    
-    // Wait for connection
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 50) {
-        delay(200);
-        attempts++;
-        
-        // Check timeout
-        if (millis() - connectionStart > connectionTimeout) {
-            Serial.println("[WiFi] Connection timeout, starting config portal...");
-            startConfigPortal();
+
+    unsigned long start = millis();
+    while (millis() - start < connectionTimeout) {
+        if (staConnected) {
+            WiFi.removeEvent(wifiEventCb);
+            WiFi.setSleep(false);  // keep radio on — prevent modem sleep disconnects
+            LOG_INFO("WIFI", "STA connected: %s  IP: %s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+            return true;
+        }
+        if (staTimedOut) {
+            WiFi.removeEvent(wifiEventCb);
+            LOG_WARN("WIFI", "STA disconnected (auth fail or out of range)");
+            return false;
+        }
+        delay(100);
+        yield();  // feed WDT during long STA connect
+    }
+
+    WiFi.removeEvent(wifiEventCb);
+    LOG_WARN("WIFI", "STA connection timed out after %lums", connectionTimeout);
+    return false;
+}
+
+void WiFiManager::begin() {
+    if (hasStoredCredentials()) {
+        LOG_INFO("WIFI", "Credentials found, attempting STA...");
+        if (connectSTA()) {
+            apMode = false;
+            staWasConnected = true;
+            lastStaCheck = millis();
+            SystemStatus::getInstance().setOperationalMode(OperationalMode::OP_STA_IDLE);
+            powerManager.setOperationalMode(OperationalMode::OP_STA_IDLE);
             return;
         }
+        LOG_WARN("WIFI", "STA failed, falling back to AP...");
     }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("[WiFi] Connected! IP: ");
-        Serial.println(WiFi.localIP());
-        Serial.print("[WiFi] Signal: ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        apMode = false;
-    } else {
-        Serial.println("[WiFi] Connection failed, starting config portal...");
-        startConfigPortal();
-    }
+    LOG_INFO("WIFI", "Starting AP mode (STA disabled)...");
+    startConfigPortal();
+    SystemStatus::getInstance().setOperationalMode(OperationalMode::OP_AP_FULL);
+    powerManager.setOperationalMode(OperationalMode::OP_AP_FULL);
 }
 
 void WiFiManager::update() {
     if (apMode && configPortal) {
         configPortal->handleClient();
+        return;
     }
-    
-    // Check if connected WiFi dropped
-    if (!apMode && WiFi.status() != WL_CONNECTED) {
-        Serial.println("[WiFi] Connection lost, restarting...");
-        begin();
+
+    // STA mode: non-blocking reconnect state machine
+    if (!apMode && staWasConnected) {
+        // Phase 1: periodic health check
+        if (!reconnecting && (millis() - lastStaCheck > 5000)) {
+            lastStaCheck = millis();
+            if (WiFi.status() != WL_CONNECTED) {
+                LOG_WARN("WIFI", "STA disconnected — starting reconnect...");
+                WiFi.reconnect();
+                reconnecting = true;
+                reconnectStart = millis();
+            }
+        }
+
+        // Phase 2: poll reconnect result (non-blocking)
+        if (reconnecting) {
+            if (WiFi.status() == WL_CONNECTED) {
+                reconnecting = false;
+                LOG_INFO("WIFI", "Reconnected — IP: %s", WiFi.localIP().toString().c_str());
+            } else if (millis() - reconnectStart > 10000) {
+                LOG_ERROR("WIFI", "Reconnect failed — falling back to AP");
+                reconnecting = false;
+                WiFi.mode(WIFI_OFF);
+                delay(200);
+                startConfigPortal();
+                SystemStatus::getInstance().setOperationalMode(OperationalMode::OP_AP_FULL);
+                powerManager.setOperationalMode(OperationalMode::OP_AP_FULL);
+            }
+        }
     }
 }
 
 bool WiFiManager::isConnected() {
-    return WiFi.status() == WL_CONNECTED;
+    return apMode || (WiFi.status() == WL_CONNECTED);
 }
 
 bool WiFiManager::isAPMode() {
@@ -112,22 +171,49 @@ bool WiFiManager::hasStoredCredentials() {
 
 void WiFiManager::startConfigPortal() {
     apMode = true;
-    
-    // Stop existing WiFi
-    WiFi.disconnect();
+
+    // Full WiFi reset — prevent mode-switch failures
+    WiFi.mode(WIFI_OFF);
+    delay(200);
     WiFi.mode(WIFI_AP);
-    
-    // Start AP
+    delay(200);
+
+    WiFi.setSleep(false);  // keep radio on — critical for AP visibility
+
+    // Force 20MHz b/g/n on channel 6 (avoid congested channel 1)
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+
+    // Start AP on channel 6
     WiFi.softAPConfig(CONFIG_AP_IP, CONFIG_AP_IP, IPAddress(255, 255, 255, 0));
-    WiFi.softAP(CONFIG_AP_SSID, CONFIG_AP_PASS);
+
+    bool apOk = WiFi.softAP(CONFIG_AP_SSID, NULL, 6);
+    if (!apOk) {
+        LOG_ERROR("WIFI", "softAP FAILED — retry channel 1...");
+        WiFi.mode(WIFI_OFF);
+        delay(200);
+        WiFi.mode(WIFI_AP);
+        delay(200);
+        apOk = WiFi.softAP(CONFIG_AP_SSID);
+    }
+
+    if (apOk) {
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);  // max range for phone visibility
+        LOG_INFO("WIFI", "AP active: %s", CONFIG_AP_SSID);
+        LOG_INFO("WIFI", "IP: %s  MAC: %s", CONFIG_AP_IP.toString().c_str(), WiFi.softAPmacAddress().c_str());
+        LOG_INFO("WIFI", "Channel: %d  TX: 19.5dBm  Sleep: OFF", WiFi.channel());
+    } else {
+        LOG_ERROR("WIFI", "softAP FAILED after retry — AP not broadcasting");
+    }
     
-    Serial.print("[WiFi] Config portal started: ");
-    Serial.println(CONFIG_AP_SSID);
-    Serial.print("[WiFi] AP IP: ");
-    Serial.println(CONFIG_AP_IP);
-    Serial.print("[WiFi] Password: ");
-    Serial.println(CONFIG_AP_PASS);
-    
+    // Setup web server
+    configPortal = new WebServer(CONFIG_AP_IP, 80);
+    if (!configPortal) {
+        LOG_ERROR("WIFI", "OOM: WebServer allocation failed — AP not available");
+        apMode = false;
+        return;
+    }
+
     // Setup web routes
     configPortal->on("/", [this]() { handleRoot(); });
     configPortal->on("/save", [this]() { handleSave(); });
@@ -148,259 +234,80 @@ void WiFiManager::stopConfigPortal() {
 }
 
 void WiFiManager::handleRoot() {
-    String html = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inventory Box - WiFi Setup</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: "Segoe UI", Arial, sans-serif;
-            background: #e8eef4;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .container {
-            background: #fff;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            width: 400px;
-            max-width: 90%;
-        }
-        h1 { color: #1a3c6e; margin-bottom: 5px; font-size: 20px; }
-        .subtitle { color: #888; margin-bottom: 20px; font-size: 12px; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; color: #555; font-size: 12px; }
-        select, input {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #c8d6e5;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        select:focus, input:focus { outline: none; border-color: #4a90d9; }
-        .btn {
-            width: 100%;
-            padding: 12px;
-            background: #1a3c6e;
-            color: #fff;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        .btn:hover { background: #2c5282; }
-        .btn:disabled { background: #ccc; cursor: not-allowed; }
-        .networks {
-            max-height: 200px;
-            overflow-y: auto;
-            border: 1px solid #c8d6e5;
-            border-radius: 4px;
-            margin-bottom: 10px;
-        }
-        .network-item {
-            padding: 10px;
-            cursor: pointer;
-            border-bottom: 1px solid #e8eef4;
-        }
-        .network-item:hover { background: #f0f3f7; }
-        .network-item.selected { background: #dbeafe; }
-        .network-name { font-weight: 600; }
-        .network-rssi { font-size: 11px; color: #888; }
-        .loading { text-align: center; padding: 20px; color: #888; }
-        .message {
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 15px;
-            font-size: 12px;
-        }
-        .message.success { background: #d4edda; color: #155724; }
-        .message.error { background: #f8d7da; color: #721c24; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Inventory Box Setup</h1>
-        <p class="subtitle">Connect to your WiFi network</p>
-        
-        <div id="message"></div>
-        
-        <div class="form-group">
-            <label>Select Network</label>
-            <div class="networks" id="networks">
-                <div class="loading">Scanning for networks...</div>
-            </div>
-        </div>
-        
-        <div class="form-group">
-            <label>Password</label>
-            <input type="password" id="password" placeholder="WiFi Password">
-        </div>
-        
-        <button class="btn" id="saveBtn" onclick="saveConfig()">Connect</button>
-    </div>
-
-    <script>
-        let selectedSSID = '';
-        
-        async function scanNetworks() {
-            try {
-                const res = await fetch('/scan');
-                const data = await res.json();
-                const container = document.getElementById('networks');
-                
-                if (data.networks.length === 0) {
-                    container.innerHTML = '<div class="loading">No networks found, click to rescan</div>';
-                    return;
-                }
-                
-                container.innerHTML = data.networks.map(n => 
-                    `<div class="network-item" onclick="selectNetwork('${n.ssid}')">
-                        <div class="network-name">${n.ssid}</div>
-                        <div class="network-rssi">Signal: ${n.rssi} dBm</div>
-                    </div>`
-                ).join('');
-            } catch (err) {
-                document.getElementById('networks').innerHTML = 
-                    '<div class="loading">Scan failed, try again</div>';
-            }
-        }
-        
-        function selectNetwork(ssid) {
-            selectedSSID = ssid;
-            document.querySelectorAll('.network-item').forEach(el => el.classList.remove('selected'));
-            event.target.closest('.network-item').classList.add('selected');
-        }
-        
-        async function saveConfig() {
-            const password = document.getElementById('password').value;
-            
-            if (!selectedSSID) {
-                showMessage('Please select a network', 'error');
-                return;
-            }
-            
-            document.getElementById('saveBtn').disabled = true;
-            document.getElementById('saveBtn').textContent = 'Connecting...';
-            
-            try {
-                const res = await fetch('/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ssid: selectedSSID, password: password })
-                });
-                
-                const data = await res.json();
-                
-                if (data.success) {
-                    showMessage('Connected! Device will restart...', 'success');
-                    document.getElementById('saveBtn').textContent = 'Success!';
-                } else {
-                    showMessage(data.error || 'Connection failed', 'error');
-                    document.getElementById('saveBtn').disabled = false;
-                    document.getElementById('saveBtn').textContent = 'Connect';
-                }
-            } catch (err) {
-                showMessage('Error saving configuration', 'error');
-                document.getElementById('saveBtn').disabled = false;
-                document.getElementById('saveBtn').textContent = 'Connect';
-            }
-        }
-        
-        function showMessage(text, type) {
-            document.getElementById('message').innerHTML = 
-                `<div class="message ${type}">${text}</div>`;
-        }
-        
-        scanNetworks();
-        setInterval(scanNetworks, 5000);
-    </script>
-</body>
-</html>
-    )rawliteral";
-    
-    configPortal->send(200, "text/html", html);
+    spiffsLock();
+    if (SPIFFS.exists("/wifi-setup.html")) {
+        File file = SPIFFS.open("/wifi-setup.html", "r");
+        configPortal->streamFile(file, "text/html");
+        file.close();
+        spiffsUnlock();
+        return;
+    }
+    spiffsUnlock();
+    // Fallback if SPIFFS not uploaded
+    configPortal->send(200, "text/html",
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>WiFi Setup</title></head><body style='font-family:Arial;text-align:center;padding:50px;background:#e8eef4'>"
+        "<h1>WiFi Setup</h1><p>SPIFFS files not uploaded. Please upload SPIFFS first.</p>"
+        "</body></html>");
 }
 
 void WiFiManager::handleSave() {
-    if (configPortal->method() == HTTP_POST) {
-        String body = configPortal->arg("plain");
-        
-        // Parse JSON
-        String ssid, password;
-        
-        int ssidStart = body.indexOf("\"ssid\":\"") + 8;
-        if (ssidStart > 7) {
-            int ssidEnd = body.indexOf("\"", ssidStart);
-            ssid = body.substring(ssidStart, ssidEnd);
-        }
-        
-        int passStart = body.indexOf("\"password\":\"") + 12;
-        if (passStart > 11) {
-            int passEnd = body.indexOf("\"", passStart);
-            password = body.substring(passStart, passEnd);
-        }
-        
-        if (ssid.length() == 0) {
-            String error = "{\"success\":false,\"error\":\"Invalid SSID\"}";
-            configPortal->send(400, "application/json", error);
-            return;
-        }
-        
-        // Save credentials
-        setCredentials(ssid.c_str(), password.c_str());
-        
-        Serial.print("[WiFi] Credentials saved for: ");
-        Serial.println(ssid);
-        
-        // Try to connect
-        configPortal->send(200, "application/json", "{\"success\":true}");
-        
-        // Restart to connect
-        delay(1000);
-        ESP.restart();
+    if (configPortal->method() != HTTP_POST) return;
+
+    struct { char ssid[33]; char pass[65]; } req;
+    memset(&req, 0, sizeof(req));
+
+    JField fields[] = {
+        {"ssid",     JField::T_STR, req.ssid, sizeof(req.ssid)},
+        {"password", JField::T_STR, req.pass, sizeof(req.pass)},
+    };
+    String err;
+    if (!jsonParse(configPortal->arg("plain").c_str(), fields, 2, err)) {
+        configPortal->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+        return;
     }
+
+    if (req.ssid[0] == '\0') {
+        configPortal->send(400, "application/json", "{\"success\":false,\"error\":\"SSID required\"}");
+        return;
+    }
+
+    setCredentials(req.ssid, req.pass);
+    LOG_INFO("WIFI", "Credentials saved for: %s", req.ssid);
+    configPortal->send(200, "application/json", "{\"success\":true}");
+
+    delay(1000);
+    ESP.restart();
 }
 
 void WiFiManager::handleScan() {
     int n = WiFi.scanComplete();
-    
-    // If scan not done, start one
+
     if (n == WIFI_SCAN_FAILED) {
         WiFi.scanNetworks(true);
         configPortal->send(200, "application/json", "{\"networks\":[]}");
         return;
     }
-    
+
     if (n == WIFI_SCAN_RUNNING) {
         configPortal->send(200, "application/json", "{\"networks\":[]}");
         return;
     }
-    
-    // Parse results
-    String json = "{\"networks\":[";
-    bool first = true;
-    
+
+    JsonBuilder jb;
+    jb.startObj();
+    jb.startArr("networks");
     for (int i = 0; i < n; i++) {
         String ssid = WiFi.SSID(i);
         if (ssid.length() == 0) continue;
-        
-        if (!first) json += ",";
-        first = false;
-        
-        json += "{\"ssid\":\"" + ssid + "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
+        jb.startArrObj();
+        jb.addStr("ssid", ssid.c_str());
+        jb.addInt("rssi", WiFi.RSSI(i));
+        jb.endObj();
     }
-    
-    json += "]}";
-    
-    // Clear scan results for next time
+    jb.endArr();
+    jb.endObj();
+
     WiFi.scanDelete();
-    
-    configPortal->send(200, "application/json", json);
+    configPortal->send(200, "application/json", jb.str());
 }

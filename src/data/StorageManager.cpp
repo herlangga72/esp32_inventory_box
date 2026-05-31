@@ -1,7 +1,7 @@
 #include "StorageManager.h"
 
 bool StorageManager::begin(const char* ns) {
-    namespace = ns;
+    nvsNamespace = ns;
     return prefs.begin(ns, false);  // read-only = false (allows writes)
 }
 

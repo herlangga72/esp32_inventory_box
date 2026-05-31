@@ -47,6 +47,7 @@ private:
     // Calibration
     bool calibrating;
     int calibrationSamples;
+    int totalCalSamples;
     float calibrationSum;
     
     float applyMovingAverage(int32_t raw);

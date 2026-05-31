@@ -3,12 +3,14 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include "../config/Config.h"
 
 class SSD1306Driver {
 public:
     SSD1306Driver(int sda = PIN_DISPLAY_SDA, int scl = PIN_DISPLAY_SCL, int rst = PIN_DISPLAY_RST);
     
     bool init(uint8_t address = DISPLAY_ADDR);
+    bool ping();  // I2C probe — true if device responds
     void clear();
     void display();
     

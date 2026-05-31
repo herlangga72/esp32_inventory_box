@@ -1,152 +1,113 @@
 #include "LogRepository.h"
+#include "../utils/LogFile.h"
+#include "../utils/LogManager.h"
 #include <string.h>
 
-LogRepository::LogRepository(StorageManager* storage)
-    : storage(storage), writeIndex(0), logCount(0) {
-    writeIndex = storage->getInt("log_write_idx", 0);
-    logCount = storage->getInt("log_count", 0);
-}
+LogRepository::LogRepository() {}
 
-void LogRepository::log(const LogEntry& entry) {
-    char key[16];
-    char data[128];
-    
-    snprintf(data, sizeof(data), "%ld|%d|%d|%s|%.2f|%.2f|%d",
-        entry.timestamp,
-        entry.userId,
-        entry.toolId,
-        entry.event,
-        entry.weightGrams,
-        entry.deltaGrams,
-        entry.motionType
+std::vector<LogEntry> LogRepository::findFiltered(int limit, int offset,
+                                                   int minLevel, const char* tag) {
+    std::vector<LogEntry> results;
+
+    // We need a callback to accumulate results
+    struct CallbackData {
+        std::vector<LogEntry>* results;
+        int minLevel;
+        const char* tag;
+        LogRepository* repo;
+        int returned;
+        int limit;
+    };
+
+    CallbackData cbData;
+    cbData.results = &results;
+    cbData.minLevel = minLevel;
+    cbData.tag = tag;
+    cbData.repo = this;
+    cbData.returned = 0;
+    cbData.limit = limit;
+
+    logFileRead(offset, limit,
+        [](const char* line, void* arg) {
+            CallbackData* d = (CallbackData*)arg;
+            if (d->returned >= d->limit) return;
+
+            LogEntry entry = d->repo->parseCSVLine(String(line));
+
+            // Filter by level
+            if (entry.severity < d->minLevel) return;
+
+            // Filter by tag (tag is stored in entry.event)
+            if (d->tag && d->tag[0] && strcmp(entry.event, d->tag) != 0) return;
+
+            d->results->push_back(entry);
+            d->returned++;
+        },
+        &cbData
     );
-    
-    snprintf(key, sizeof(key), "log_%d", writeIndex);
-    storage->putString(key, data);
-    
-    incrementWriteIndex();
+
+    return results;
 }
 
 std::vector<LogEntry> LogRepository::findAll(int limit, int offset) {
-    std::vector<LogEntry> result;
-    
-    int startIdx = (writeIndex - 1 - offset + Config::MAX_LOGS) % Config::MAX_LOGS;
-    int count = 0;
-    
-    for (int i = 0; i < limit && count < logCount; i++) {
-        int idx = (startIdx - i + Config::MAX_LOGS) % Config::MAX_LOGS;
-        
-        char key[16];
-        snprintf(key, sizeof(key), "log_%d", idx);
-        
-        String dataStr = storage->getString(key, "");
-        if (dataStr.length() > 0) {
-            char data[128];
-            dataStr.toCharArray(data, sizeof(data));
-            
-            LogEntry entry;
-            char* p = strtok(data, "|");
-            if (p) entry.timestamp = atol(p);
-            
-            p = strtok(NULL, "|");
-            if (p) entry.userId = atoi(p);
-            
-            p = strtok(NULL, "|");
-            if (p) entry.toolId = atoi(p);
-            
-            p = strtok(NULL, "|");
-            if (p) entry.setEvent(p);
-            
-            p = strtok(NULL, "|");
-            if (p) entry.weightGrams = atof(p);
-            
-            p = strtok(NULL, "|");
-            if (p) entry.deltaGrams = atof(p);
-            
-            p = strtok(NULL, "|");
-            if (p) entry.motionType = atoi(p);
-            
-            result.push_back(entry);
-            count++;
-        }
-    }
-    
-    return result;
-}
-
-std::vector<LogEntry> LogRepository::findByUser(int userId) {
-    auto all = findAll(Config::MAX_LOGS, 0);
-    std::vector<LogEntry> filtered;
-    
-    for (auto& entry : all) {
-        if (entry.userId == userId) {
-            filtered.push_back(entry);
-        }
-    }
-    
-    return filtered;
-}
-
-std::vector<LogEntry> LogRepository::findByTool(int toolId) {
-    auto all = findAll(Config::MAX_LOGS, 0);
-    std::vector<LogEntry> filtered;
-    
-    for (auto& entry : all) {
-        if (entry.toolId == toolId) {
-            filtered.push_back(entry);
-        }
-    }
-    
-    return filtered;
+    return findFiltered(limit, offset, 0, nullptr);
 }
 
 int LogRepository::count() {
-    return logCount;
+    return logFileCount();
+}
+
+String LogRepository::downloadCSV() {
+    return logFileGetAll();
 }
 
 void LogRepository::clear() {
-    char key[16];
-    for (int i = 0; i < Config::MAX_LOGS; i++) {
-        snprintf(key, sizeof(key), "log_%d", i);
-        storage->remove(key);
-    }
-    
-    writeIndex = 0;
-    logCount = 0;
-    storage->putInt("log_write_idx", 0);
-    storage->putInt("log_count", 0);
+    logFileClear();
 }
 
-String LogRepository::exportJSON() {
-    String json = "{\"logs\":[";
-    
-    auto logs = findAll(100, 0);
-    bool first = true;
-    
-    for (auto& entry : logs) {
-        if (!first) json += ",";
-        first = false;
-        
-        json += "{";
-        json += "\"timestamp\":" + String(entry.timestamp) + ",";
-        json += "\"userId\":" + String(entry.userId) + ",";
-        json += "\"toolId\":" + String(entry.toolId) + ",";
-        json += "\"event\":\"" + String(entry.event) + "\",";
-        json += "\"weightGrams\":" + String(entry.weightGrams, 2) + ",";
-        json += "\"deltaGrams\":" + String(entry.deltaGrams, 2);
-        json += "}";
-    }
-    
-    json += "]}";
-    return json;
+uint32_t LogRepository::getDropped() {
+    return logGetDropped();
 }
 
-void LogRepository::incrementWriteIndex() {
-    writeIndex = (writeIndex + 1) % Config::MAX_LOGS;
-    if (logCount < Config::MAX_LOGS) {
-        logCount++;
+size_t LogRepository::fileSize() {
+    return logFileSize();
+}
+
+LogEntry LogRepository::parseCSVLine(const String& line) {
+    LogEntry entry;
+
+    // Parse: timestamp,level,tag,"message"
+    int pos = 0;
+
+    // Timestamp
+    int comma1 = line.indexOf(',', pos);
+    if (comma1 > 0) {
+        entry.timestamp = line.substring(pos, comma1).toInt();
+        pos = comma1 + 1;
     }
-    
-    storage->putInt("log_write_idx", writeIndex);
-    storage->putInt("log_count", logCount);
+
+    // Level (severity)
+    int comma2 = line.indexOf(',', pos);
+    if (comma2 > 0) {
+        entry.severity = line.substring(pos, comma2).toInt();
+        pos = comma2 + 1;
+    }
+
+    // Tag -> event field
+    int comma3 = line.indexOf(',', pos);
+    if (comma3 > 0) {
+        entry.setEvent(line.substring(pos, comma3).c_str());
+        pos = comma3 + 1;
+    }
+
+    // Message (quoted) -> message field
+    if (pos < (int)line.length() && line[pos] == '"') {
+        pos++; // skip opening quote
+        int endQuote = line.lastIndexOf('"');
+        if (endQuote > pos) {
+            entry.setMessage(line.substring(pos, endQuote).c_str());
+        }
+    }
+
+    return entry;
 }

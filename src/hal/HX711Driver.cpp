@@ -22,11 +22,15 @@ void HX711Driver::begin() {
 }
 
 int32_t HX711Driver::readRaw() {
-    // Wait for ready signal
+    // Wait for ready signal with timeout
+    unsigned long start = micros();
     while (digitalRead(pinData) == HIGH) {
-        // Check timeout
+        if (micros() - start > 100000UL) {  // 100ms timeout
+            return INT32_MIN;  // No sensor connected
+        }
+        vTaskDelay(0);  // yield to other tasks, feed WDT
     }
-    
+
     delayMicroseconds(10);
     
     // Read 24 bits
@@ -87,5 +91,6 @@ void HX711Driver::tare(int samples) {
         sum += readRaw();
         delay(50);
     }
+    if (samples <= 0) return;
     offset = sum / samples;
 }

@@ -34,7 +34,7 @@ public:
 
 private:
     Preferences prefs;
-    const char* namespace;
+    const char* nvsNamespace;
 };
 
 #endif // STORAGE_MANAGER_H

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include "../config/Config.h"
 
 class MPU6050Driver {
 public:
@@ -14,7 +15,7 @@ public:
     void readRaw(int16_t& ax, int16_t& ay, int16_t& az, int16_t& gx, int16_t& gy, int16_t& gz);
     
     void setAccelRange(uint8_t range);   // 2, 4, 8, 16
-    void setGyroRange(uint8_t range);     // 250, 500, 1000, 2000
+    void setGyroRange(uint16_t range);    // 250, 500, 1000, 2000
     void setDLPF(uint8_t bandwidth);      // 0-6 (260Hz to 5Hz)
     
     void enableMotionInterrupt(bool enable, float threshold = 0.5f);

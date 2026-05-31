@@ -10,13 +10,15 @@ struct User {
     bool active;
     time_t createdAt;
     
+    int fpId;  // 0 = no fingerprint, 1-127 = enrolled slot
+
     // Stats
     unsigned long totalUsageSeconds;
     int sessionCount;
     int toolPlacements;
     int toolRemovals;
-    
-    User() : id(0), active(true), createdAt(0),
+
+    User() : id(0), active(true), createdAt(0), fpId(0),
              totalUsageSeconds(0), sessionCount(0),
              toolPlacements(0), toolRemovals(0) {
         name[0] = '\0';

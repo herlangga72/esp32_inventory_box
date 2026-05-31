@@ -45,17 +45,17 @@ MotionType MotionService::classifyMotion(float dx, float dy, float dz) {
     float totalMag = sqrt(currentAccel[0]*currentAccel[0] + 
                           currentAccel[1]*currentAccel[1] + 
                           currentAccel[2]*currentAccel[2]);
-    if (totalMag < FREE_FALL_THRESHOLD_G) {
+    if (totalMag < Config::FREE_FALL_THRESHOLD_G) {
         return MotionType::FREE_FALL;
     }
     
     // Significant tilt (Z-axis change)
-    if (zDelta > TILT_THRESHOLD_G) {
+    if (zDelta > Config::TILT_THRESHOLD_G) {
         return MotionType::TILT;
     }
     
     // Vibration or movement
-    if (magnitude > MOTION_THRESHOLD_G) {
+    if (magnitude > Config::MOTION_THRESHOLD_G) {
         if (magnitude > 0.5f) {
             return MotionType::MOVEMENT;
         }
@@ -68,11 +68,11 @@ MotionType MotionService::classifyMotion(float dx, float dy, float dz) {
 
 bool MotionService::detectTilt(float ax, float ay, float az) {
     float zDelta = abs(az - restingAccel[2]);
-    return zDelta > TILT_THRESHOLD_G;
+    return zDelta > Config::TILT_THRESHOLD_G;
 }
 
 bool MotionService::detectFreeFall(float magnitude) {
-    return magnitude < FREE_FALL_THRESHOLD_G;
+    return magnitude < Config::FREE_FALL_THRESHOLD_G;
 }
 
 MotionType MotionService::getCurrentMotion() {
@@ -99,9 +99,8 @@ bool MotionService::isBoxPickedUp() {
 
 void MotionService::calibrateBaseline() {
     mpu->readAccel(restingAccel[0], restingAccel[1], restingAccel[2]);
-    
-    // Z should be ~1g when flat
-    // restingAccel[2] -= 1.0f;  // Remove gravity component
+
+    restingAccel[2] -= 1.0f;  // Remove gravity component (Z reads ~1g when flat)
     
     EventBus::getInstance()->publish(DomainEvent::CALIBRATION_COMPLETE);
 }

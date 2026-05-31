@@ -1,10 +1,12 @@
 #include "DisplayManager.h"
 #include "../domain/events/Events.h"
+#include "../utils/LogManager.h"
+#include <WiFi.h>
 #include <string.h>
 
 DisplayManager::DisplayManager(SSD1306Driver* oled, EventBus* events)
     : oled(oled), events(events), currentScreen(Screen::STATUS),
-      lastRefresh(0), notificationEnd(0) {
+      lastRefresh(0), lastHealthCheck(0), healthy(false), notificationEnd(0) {
     displayWeight = 0;
     displayBaseline = 0;
     displayDelta = 0;
@@ -14,26 +16,42 @@ DisplayManager::DisplayManager(SSD1306Driver* oled, EventBus* events)
 
 void DisplayManager::init() {
     // Subscribe to events
-    events->subscribe(DomainEvent::WEIGHT_UPDATED, [this](const EventPayload& e) {
+    LOG_INFO("DISP", "sub weight...");
+    weightToken = events->subscribe(DomainEvent::WEIGHT_UPDATED, [this](const EventPayload& e) {
         displayWeight = e.data.weight.weight;
         displayDelta = e.data.weight.delta;
         displayBaseline = e.data.weight.baseline;
     });
-    
-    events->subscribe(DomainEvent::TOOL_PLACED, [this](const EventPayload& e) {
+    LOG_INFO("DISP", "sub weight OK");
+
+    LOG_INFO("DISP", "sub tool_placed...");
+    toolPlacedToken = events->subscribe(DomainEvent::TOOL_PLACED, [this](const EventPayload& e) {
         displayContentCount++;
         showNotification("Tool placed");
     });
-    
-    events->subscribe(DomainEvent::TOOL_REMOVED, [this](const EventPayload& e) {
+    LOG_INFO("DISP", "sub tool_placed OK");
+
+    LOG_INFO("DISP", "sub tool_removed...");
+    toolRemovedToken = events->subscribe(DomainEvent::TOOL_REMOVED, [this](const EventPayload& e) {
         displayContentCount--;
         showNotification("Tool removed");
     });
+    LOG_INFO("DISP", "sub tool_removed OK");
+
+    healthy = oled->isInitialized();
+    lastHealthCheck = millis();
 }
 
 void DisplayManager::update() {
     if (millis() - lastRefresh < 1000) return;  // 1Hz refresh
-    
+
+    // Health check every 5s — attempt reinit if OLED fell off I2C bus
+    if (millis() - lastHealthCheck > 5000) {
+        healthCheck();
+    }
+
+    if (!healthy) return;
+
     switch (currentScreen) {
         case Screen::STATUS:
             drawStatusScreen();
@@ -51,14 +69,38 @@ void DisplayManager::update() {
             drawErrorScreen("System Error");
             break;
     }
-    
+
     // Draw notification if active
     if (millis() < notificationEnd) {
         drawNotification();
     }
-    
+
     oled->display();
     lastRefresh = millis();
+}
+
+bool DisplayManager::healthCheck() {
+    lastHealthCheck = millis();
+
+    if (oled->ping()) {
+        if (!healthy) {
+            LOG_INFO("DISP", "recovered — OLED back on I2C bus");
+        }
+        healthy = true;
+        return true;
+    }
+
+    // OLED not responding — attempt reinit
+    LOG_INFO("DISP", "OLED unresponsive — reinitializing...");
+    if (oled->init()) {
+        healthy = true;
+        LOG_INFO("DISP", "reinit OK");
+        return true;
+    }
+
+    healthy = false;
+    LOG_INFO("DISP", "reinit FAILED — display offline");
+    return false;
 }
 
 void DisplayManager::setScreen(Screen screen) {
@@ -110,8 +152,12 @@ void DisplayManager::drawStatusScreen() {
     // WiFi RSSI
     oled->setCursor(0, 56);
     oled->print("WiFi: ");
-    oled->print(WiFi.RSSI());
-    oled->print(" dBm");
+    if (WiFi.isConnected()) {
+        oled->print(WiFi.RSSI());
+        oled->print(" dBm");
+    } else {
+        oled->print("Offline");
+    }
 }
 
 void DisplayManager::drawEventLogScreen() {

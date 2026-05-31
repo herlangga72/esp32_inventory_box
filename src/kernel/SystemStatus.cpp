@@ -1,4 +1,5 @@
 #include "SystemStatus.h"
+#include "../utils/LogManager.h"
 
 SystemStatus& SystemStatus::getInstance() {
     static SystemStatus instance;
@@ -37,7 +38,7 @@ void SystemStatus::begin() {
     webserver.name = "WebServer";
     components.push_back(webserver);
     
-    Serial.println("[Status] SystemStatus initialized");
+    LOG_INFO("STATUS", "SystemStatus initialized");
 }
 
 void SystemStatus::update() {
@@ -70,7 +71,7 @@ void SystemStatus::markOK(const char* component) {
     
     if (comp) {
         comp->status = ComponentStatus::OK;
-        Serial.printf("[Status] %s: OK\n", component);
+        LOG_INFO("STATUS", "%s: OK", component);
     }
 }
 
@@ -89,7 +90,7 @@ void SystemStatus::markWarning(const char* component, const char* error) {
         lastError = String(component) + ": " + error;
         totalErrorCount++;
         
-        Serial.printf("[Status] %s: WARNING - %s\n", component, error);
+        LOG_INFO("STATUS", "%s: WARNING - %s", component, error);
     }
 }
 
@@ -108,7 +109,7 @@ void SystemStatus::markError(const char* component, const char* error) {
         lastError = String(component) + ": " + error;
         totalErrorCount++;
         
-        Serial.printf("[Status] %s: ERROR - %s\n", component, error);
+        LOG_INFO("STATUS", "%s: ERROR - %s", component, error);
     }
 }
 
@@ -191,7 +192,7 @@ int SystemStatus::getErrorComponentCount() {
 
 void SystemStatus::setBootStage(BootStage stage) {
     currentStage = stage;
-    Serial.printf("[Status] Boot stage: %d\n", (int)stage);
+    LOG_INFO("STATUS", "Boot stage: %d", (int)stage);
 }
 
 BootStage SystemStatus::getBootStage() {
@@ -200,7 +201,19 @@ BootStage SystemStatus::getBootStage() {
 
 void SystemStatus::setBootComplete() {
     bootComplete = true;
-    Serial.println("[Status] Boot complete");
+    LOG_INFO("STATUS", "Boot complete");
+}
+
+void SystemStatus::setOperationalMode(OperationalMode mode) {
+    if (currentOpMode != mode) {
+        currentOpMode = mode;
+        LOG_INFO("STATUS", "OpMode: %s",
+                 mode == OperationalMode::OP_AP_FULL ? "AP_FULL" : "STA_IDLE");
+    }
+}
+
+OperationalMode SystemStatus::getOperationalMode() {
+    return currentOpMode;
 }
 
 bool SystemStatus::isBootComplete() {
@@ -217,7 +230,7 @@ void SystemStatus::clearErrors() {
         }
     }
     lastError = "";
-    Serial.println("[Status] Errors cleared");
+    LOG_INFO("STATUS", "Errors cleared");
 }
 
 void SystemStatus::resetComponent(const char* component) {
@@ -225,6 +238,6 @@ void SystemStatus::resetComponent(const char* component) {
     if (comp) {
         comp->status = ComponentStatus::UNKNOWN;
         comp->lastError = "";
-        Serial.printf("[Status] %s reset\n", component);
+        LOG_INFO("STATUS", "%s reset", component);
     }
 }

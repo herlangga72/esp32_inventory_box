@@ -104,6 +104,18 @@ int UserRepository::count() {
     return storage->getInt("user_count", 0);
 }
 
+User* UserRepository::findByFingerprintId(int fpId) {
+    if (fpId <= 0) return nullptr;
+    if (!cacheValid) loadCache();
+    int n = count();
+    for (int i = 0; i < n && i < Config::MAX_USERS; i++) {
+        if (cache[i].active && cache[i].fpId == fpId) {
+            return &cache[i];
+        }
+    }
+    return nullptr;
+}
+
 User* UserRepository::authenticate(const char* pin) {
     auto all = findAll();
     
@@ -151,50 +163,77 @@ void UserRepository::resetStats(int userId) {
     }
 }
 
+// Tiny utility: extract value for JSON key like "n":"bob" → "bob"
+static const char* repoJsonGet(const char* json, const char* key) {
+    const char* pos = strstr(json, key);
+    if (!pos) return nullptr;
+    pos += strlen(key) + 2;
+    if (*pos == '"') pos++;
+    return pos;
+}
+
 void UserRepository::serialize(const User& user, char* buffer, size_t len) {
-    snprintf(buffer, len, "%d|%s|%s|%d|%ld|%lu|%d|%d|%d",
-        user.id,
-        user.name,
-        user.pin,
-        user.active ? 1 : 0,
-        user.createdAt,
-        user.totalUsageSeconds,
-        user.sessionCount,
-        user.toolPlacements,
-        user.toolRemovals
-    );
+    snprintf(buffer, len, "%d|%s|%s|%d|%ld|%lu|%d|%d|%d|%d",
+        user.id, user.name, user.pin, user.active ? 1 : 0, user.createdAt,
+        user.totalUsageSeconds, user.sessionCount, user.toolPlacements, user.toolRemovals,
+        user.fpId);
 }
 
 User UserRepository::deserialize(const char* buffer) {
+    if (buffer[0] == '{') {
+        // Migrate old JSON → new
+        User user;
+        const char* v;
+        v = repoJsonGet(buffer, "\"n\""); if (v) { char s[32]; int i=0; while(*v && *v!='"' && i<31) s[i++]=*v++; s[i]=0; user.setName(s); }
+        v = repoJsonGet(buffer, "\"p\""); if (v) { char s[8]; int i=0; while(*v && *v!='"' && i<7) s[i++]=*v++; s[i]=0; user.setPin(s); }
+        v = repoJsonGet(buffer, "\"id\""); user.id = v ? atoi(v) : 0;
+        v = repoJsonGet(buffer, "\"a\""); user.active = v ? (*v == 't') : true;
+        v = repoJsonGet(buffer, "\"c\""); user.createdAt = v ? atol(v) : 0;
+        v = repoJsonGet(buffer, "\"us\""); user.totalUsageSeconds = v ? atol(v) : 0;
+        v = repoJsonGet(buffer, "\"sc\""); user.sessionCount = v ? atoi(v) : 0;
+        v = repoJsonGet(buffer, "\"tp\""); user.toolPlacements = v ? atoi(v) : 0;
+        v = repoJsonGet(buffer, "\"tr\""); user.toolRemovals = v ? atoi(v) : 0;
+        return user;
+    }
+    return deserializeLegacy(buffer);
+}
+
+User UserRepository::deserializeLegacy(const char* buffer) {
     User user;
-    
-    char* p = strtok((char*)buffer, "|");
+    char buf[256];
+    strncpy(buf, buffer, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char* p = strtok(buf, "|");
     if (p) user.id = atoi(p);
-    
+
     p = strtok(NULL, "|");
     if (p) user.setName(p);
-    
+
     p = strtok(NULL, "|");
     if (p) user.setPin(p);
-    
+
     p = strtok(NULL, "|");
     if (p) user.active = (atoi(p) == 1);
-    
+
     p = strtok(NULL, "|");
-    if (p) user.createdAt = atoi(p);
-    
+    if (p) user.createdAt = atol(p);
+
     p = strtok(NULL, "|");
     if (p) user.totalUsageSeconds = atol(p);
-    
+
     p = strtok(NULL, "|");
     if (p) user.sessionCount = atoi(p);
-    
+
     p = strtok(NULL, "|");
     if (p) user.toolPlacements = atoi(p);
-    
+
     p = strtok(NULL, "|");
     if (p) user.toolRemovals = atoi(p);
-    
+
+    p = strtok(NULL, "|");
+    if (p) user.fpId = atoi(p);  // backward-compat: missing field → 0
+
     return user;
 }
 

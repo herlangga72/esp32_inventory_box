@@ -241,7 +241,10 @@ async function loadDiagnostics() {
         
         const diagLastError = document.getElementById('diag-last-error');
         if (diagLastError) diagLastError.textContent = data.lastError || 'None';
-        
+
+        const diagLastErrorStatus = document.getElementById('diag-last-error-status');
+        if (diagLastErrorStatus) diagLastErrorStatus.textContent = data.overallStatus || 'UNKNOWN';
+
     } catch (err) {
         console.error('Diagnostics fetch failed:', err);
     }
@@ -295,9 +298,44 @@ function waitForReconnect() {
     setTimeout(tryConnect, 3000);
 }
 
+// ============ ACCESS CONTROL ============
+
+async function fetchAccessStatus() {
+    try {
+        const data = await API.get('/access/status');
+
+        // Update access page elements if loaded
+        const accessStateEl = document.getElementById('access-state');
+        if (accessStateEl) {
+            accessStateEl.textContent = data.state || '--';
+            accessStateEl.className = 'status-card-value';
+            if (data.state === 'granted' || data.state === 'unlocking' || data.state === 'unlocked') {
+                accessStateEl.classList.add('success');
+            }
+        }
+
+        const serverStatusEl = document.getElementById('access-server-status');
+        if (serverStatusEl) {
+            if (data.serverStatus === 0) {
+                serverStatusEl.textContent = 'Online';
+                serverStatusEl.className = 'status-card-value success';
+            } else if (data.serverStatus === 1) {
+                serverStatusEl.textContent = 'Offline';
+                serverStatusEl.className = 'status-card-value error';
+            } else {
+                serverStatusEl.textContent = 'Not Configured';
+                serverStatusEl.className = 'status-card-value';
+            }
+        }
+    } catch (err) {
+        // Page not loaded or fetch failed — silent
+    }
+}
+
 function refreshAll() {
     fetchStatus();
     loadDiagnostics();
+    fetchAccessStatus();
     showToast('Refreshed', 'success');
 }
 

@@ -2,6 +2,7 @@
 #define HX711_DRIVER_H
 
 #include <Arduino.h>
+#include "../config/Config.h"
 
 class HX711Driver {
 public:

@@ -24,6 +24,7 @@ public:
     
     // Authentication
     User* authenticate(const char* pin);
+    User* findByFingerprintId(int fpId);
     
     // Stats
     void recordUsage(int userId, unsigned long durationSeconds);
@@ -42,6 +43,7 @@ private:
     
     void invalidateCache();
     void loadCache();
+    User deserializeLegacy(const char* buffer);
 };
 
 #endif // USER_REPOSITORY_H

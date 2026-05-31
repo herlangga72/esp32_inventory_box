@@ -2,7 +2,8 @@
 <div class="action-bar">
     <div class="action-bar-left">
         <button class="btn btn-refresh" onclick="loadLogs()">Refresh</button>
-        <button class="btn" onclick="exportLogs()">Export CSV</button>
+        <button class="btn" onclick="downloadLogs()">Download CSV</button>
+        <button class="btn btn-danger" onclick="clearLogs()">Clear Logs</button>
     </div>
     <div class="action-bar-right">
         <select class="form-input form-input-sm" id="log-limit" onchange="loadLogs()" style="width:100px;">
@@ -24,12 +25,13 @@
             <thead>
                 <tr>
                     <th style="width:160px;">Time</th>
-                    <th style="width:120px;">Event</th>
-                    <th>Details</th>
+                    <th style="width:80px;">Level</th>
+                    <th style="width:100px;">Tag</th>
+                    <th>Message</th>
                 </tr>
             </thead>
             <tbody id="logs-table">
-                <tr><td colspan="3" class="table-empty">Loading...</td></tr>
+                <tr><td colspan="4" class="table-empty">Loading...</td></tr>
             </tbody>
         </table>
     </div>
@@ -40,82 +42,67 @@ function init_logs() {
     loadLogs();
 }
 
+const LEVEL_NAMES = ['NONE','ERROR','WARN','INFO','DEBUG'];
+const LEVEL_CLASSES = ['muted','danger','warning','success','info'];
+
 async function loadLogs() {
     const limit = document.getElementById('log-limit')?.value || 100;
-    
+
     try {
         const data = await API.get(`/logs?limit=${limit}`);
         const tbody = document.getElementById('logs-table');
-        
+
         if (!data.logs || data.logs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="table-empty">No logs recorded</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No logs recorded</td></tr>';
             return;
         }
-        
-        document.getElementById('log-count').textContent = `Total: ${data.total || 0}`;
-        
+
+        document.getElementById('log-count').textContent =
+            `Total: ${data.total || 0} | Dropped: ${data.dropped || 0} | Size: ${formatBytes(data.fileSize || 0)}`;
+
         tbody.innerHTML = data.logs.map(log => {
-            const badgeClass = getLogBadgeClass(log.event);
+            const lvlName = LEVEL_NAMES[log.level] || '?';
+            const lvlClass = LEVEL_CLASSES[log.level] || 'muted';
             return `
                 <tr>
-                    <td>${formatDate(log.timestamp)}</td>
-                    <td><span class="badge badge-${badgeClass}">${log.event}</span></td>
-                    <td>${formatLogDetails(log)}</td>
+                    <td>${formatDate(log.ts)}</td>
+                    <td><span class="badge badge-${lvlClass}">${lvlName}</span></td>
+                    <td><span class="badge badge-light">${log.tag || '--'}</span></td>
+                    <td>${log.msg || formatLogDetails(log)}</td>
                 </tr>
             `;
         }).join('');
     } catch (err) {
         console.error('Load logs failed:', err);
-        document.getElementById('logs-table').innerHTML = '<tr><td colspan="3" class="table-empty">Failed to load</td></tr>';
+        document.getElementById('logs-table').innerHTML =
+            '<tr><td colspan="4" class="table-empty">Failed to load</td></tr>';
     }
-}
-
-function getLogBadgeClass(event) {
-    if (!event) return 'muted';
-    if (event.includes('TOOL_PLACED') || event.includes('LOGIN') || event.includes('CALIBRAT')) return 'success';
-    if (event.includes('REMOV') || event.includes('LOGOUT')) return 'warning';
-    if (event.includes('ERROR') || event.includes('FAIL')) return 'danger';
-    return 'muted';
 }
 
 function formatLogDetails(log) {
     const parts = [];
-    if (log.toolId) parts.push(`Tool #${log.toolId}`);
-    if (log.userId) parts.push(`User #${log.userId}`);
-    if (log.weight) parts.push(`${log.weight.toFixed(1)}g`);
-    return parts.join(' • ') || '-';
+    if (log.toolId) parts.push('Tool #' + log.toolId);
+    if (log.userId) parts.push('User #' + log.userId);
+    if (log.weight) parts.push(Number(log.weight).toFixed(1) + 'g');
+    return parts.join(' | ') || '--';
 }
 
-async function exportLogs() {
+function downloadLogs() {
+    window.open('/api/logs/download', '_blank');
+}
+
+async function clearLogs() {
+    if (!confirm('Delete all log files? This cannot be undone.')) return;
     try {
-        const data = await API.get('/logs?limit=500');
-        
-        const csv = 'timestamp,datetime,event,userId,toolId,weight\n' +
-            data.logs.map(log => 
-                `${log.timestamp},"${formatDate(log.timestamp)}",${log.event},${log.userId || ''},${log.toolId || ''},${log.weight || ''}`
-            ).join('\n');
-        
-        // Download
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `inventory_logs_${new Date().toISOString().slice(0,10)}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
-        
-        showToast('Logs exported', 'success');
+        await API.post('/logs/clear');
+        showToast('Logs cleared', 'success');
+        loadLogs();
     } catch (err) {
-        showToast('Export failed', 'error');
+        showToast('Clear failed', 'error');
     }
 }
 
-// Auto-refresh every 10 seconds
-let logsInterval;
-window.addEventListener('focus', () => { logsInterval = setInterval(loadLogs, 10000); });
-window.addEventListener('blur', () => clearInterval(logsInterval));
-logsInterval = setInterval(loadLogs, 10000);
-
 window.loadLogs = loadLogs;
-window.exportLogs = exportLogs;
+window.downloadLogs = downloadLogs;
+window.clearLogs = clearLogs;
 </script>

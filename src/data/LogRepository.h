@@ -4,29 +4,40 @@
 #include <Arduino.h>
 #include <vector>
 #include "../domain/entities/LogEntry.h"
-#include "StorageManager.h"
-#include "config/Config.h"
+
+// Thin reader over SPIFFS log files (see utils/LogFile.h)
+// Log writing is handled by LogManager queue + LogFile — this class
+// provides read/filter/download access for web API and CLI.
 
 class LogRepository {
 public:
-    LogRepository(StorageManager* storage);
-    
-    void log(const LogEntry& entry);
+    LogRepository();
+
+    // Read paginated, filtered log entries
+    // Returns entries as LogEntry structs parsed from CSV
+    std::vector<LogEntry> findFiltered(int limit = 50, int offset = 0,
+                                       int minLevel = 0, const char* tag = nullptr);
+
+    // Legacy-compatible: findAll(limit, offset) defaults to all levels
     std::vector<LogEntry> findAll(int limit = 50, int offset = 0);
-    std::vector<LogEntry> findByUser(int userId);
-    std::vector<LogEntry> findByTool(int toolId);
+
+    // Total log line count
     int count();
+
+    // Download all log files as raw CSV string
+    String downloadCSV();
+
+    // Delete all log files
     void clear();
-    
-    String exportJSON();
+
+    // Get dropped message count from logger queue
+    uint32_t getDropped();
+
+    // Total file size in bytes
+    size_t fileSize();
 
 private:
-    StorageManager* storage;
-    int writeIndex;
-    int logCount;
-    
-    void incrementWriteIndex();
-    char* getKey(int idx, char* buffer);
+    LogEntry parseCSVLine(const String& line);
 };
 
 #endif // LOG_REPOSITORY_H

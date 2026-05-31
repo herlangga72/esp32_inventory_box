@@ -4,18 +4,19 @@
 #include <Arduino.h>
 #include <esp_sleep.h>
 #include <esp_pm.h>
+#include "../config/Config.h"
 
-enum class PowerState {
-    POWER_ACTIVE,
-    POWER_LIGHT_SLEEP,
-    POWER_DEEP_SLEEP
+enum PowerState {
+    PM_ACTIVE,
+    PM_LIGHT_SLEEP,
+    PM_DEEP_SLEEP
 };
 
 class PowerManager {
 public:
     PowerManager();
     
-    void begin();
+    void begin(bool setupWake = true);
     void update();
     void onActivity();
     
@@ -32,6 +33,8 @@ public:
     float getBaseline();
     void setBaseline(float baseline);
     void setThresholds(unsigned long lightMs, unsigned long deepMs);
+    void setOperationalMode(OperationalMode mode);
+    bool isSleepAllowed();
 
 private:
     PowerState currentState;
@@ -40,7 +43,9 @@ private:
     unsigned long deepSleepThreshold;
     float currentBaseline;
     bool pmConfigured;
-    
+    OperationalMode opMode;
+    bool sleepAllowed;
+
     void configurePowerManagement();
     void setupWakeSources();
     void saveStateToRTC();

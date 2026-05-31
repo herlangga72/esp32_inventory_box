@@ -8,23 +8,31 @@
 #include "Events.h"
 
 using EventHandler = std::function<void(const EventPayload&)>;
+using SubscriptionToken = int;
 
 class EventBus {
 public:
     static EventBus* getInstance();
-    
-    void subscribe(DomainEvent type, EventHandler handler);
-    void unsubscribe(DomainEvent type, EventHandler handler);
+
+    SubscriptionToken subscribe(DomainEvent type, EventHandler handler);
+    void unsubscribe(SubscriptionToken token);
     void publish(const EventPayload& event);
     void publish(DomainEvent type);
-    
+
     void clear();
 
 private:
+    struct SubEntry {
+        DomainEvent type;
+        int index;
+    };
+
     static EventBus* instance;
-    
+
     std::map<DomainEvent, std::vector<EventHandler>> subscribers;
-    
+    std::map<SubscriptionToken, SubEntry> tokenMap;
+    int nextToken = 1;
+
     EventBus() = default;
     EventBus(const EventBus&) = delete;
     EventBus& operator=(const EventBus&) = delete;

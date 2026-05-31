@@ -2,8 +2,8 @@
 #define DOMAIN_EVENTS_H
 
 #include <Arduino.h>
-#include "entities/Tool.h"
-#include "entities/User.h"
+#include "../entities/Tool.h"
+#include "../entities/User.h"
 
 enum class DomainEvent {
     // Weight events
@@ -28,6 +28,27 @@ enum class DomainEvent {
     USER_LOGIN,
     USER_LOGOUT,
     
+    // Access events
+    ACCESS_GRANTED,
+    ACCESS_DENIED,
+    ACCESS_LOCAL_FALLBACK,
+
+    // Door events
+    DOOR_OPEN,
+    DOOR_CLOSE,
+    DOOR_HELD_OPEN,
+
+    // Fingerprint events
+    FINGERPRINT_SCAN,
+    FINGERPRINT_ENROLL_START,
+    FINGERPRINT_ENROLL_STEP,
+    FINGERPRINT_ENROLL_COMPLETE,
+    FINGERPRINT_DELETED,
+
+    // Server events
+    SERVER_UNREACHABLE,
+    SERVER_RECONNECTED,
+
     // System events
     STATE_CHANGED,
     CALIBRATION_STARTED,
@@ -57,6 +78,13 @@ struct EventPayload {
             float baseline;
         } weight;
         
+        struct {
+            int fpId;
+            int userId;
+            const char* userName;
+            const char* reason;
+        } access;
+
         struct {
             float ax, ay, az;
             MotionType motion;

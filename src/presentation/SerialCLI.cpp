@@ -1,4 +1,6 @@
 #include "SerialCLI.h"
+#include <WiFi.h>
+#include "../utils/LogManager.h"
 #include "../data/StorageManager.h"
 #include "../data/ToolRepository.h"
 #include "../data/UserRepository.h"
@@ -55,6 +57,10 @@ void SerialCLI::parseCommand(const String& cmd) {
     }
     else if (command.startsWith("logs")) {
         cmdLogs();
+    }
+    else if (command.startsWith("log level")) {
+        String arg = command.substring(10);
+        cmdLogLevel(arg);
     }
     else if (command == "reboot" || command == "restart") {
         cmdReboot();
@@ -139,21 +145,41 @@ void SerialCLI::cmdUsers() {
 
 void SerialCLI::cmdLogs() {
     Serial.println("\n=== Recent Logs ===");
-    auto logs = logRepo.findAll(10, 0);
-    
+    auto logs = logRepo.findAll(20, 0);
+
+    const char* lvl[] = {"NONE", "ERR", "WARN", "INFO", "DBG"};
     if (logs.empty()) {
         Serial.println("No logs.");
         return;
     }
-    
-    for (auto& log : logs) {
-        Serial.printf("  [%lu] %s - user:%d tool:%d\n",
-            log.timestamp,
-            log.event,
-            log.userId,
-            log.toolId
+
+    for (auto& entry : logs) {
+        Serial.printf("  [%lu] [%s] [%s] %s\n",
+            entry.timestamp,
+            (entry.severity >= 0 && entry.severity <= 4) ? lvl[entry.severity] : "?",
+            entry.event,
+            entry.message
         );
     }
+    Serial.printf("  --- %d total, %d dropped ---\n",
+        logRepo.count(), logRepo.getDropped());
+}
+
+void SerialCLI::cmdLogLevel(const String& arg) {
+    if (arg.length() == 0) {
+        const char* names[] = {"NONE", "ERROR", "WARN", "INFO", "DEBUG"};
+        Serial.printf("Current log level: %s\n", names[logGetLevel()]);
+        return;
+    }
+    String a = arg;
+    a.toLowerCase();
+    if (a == "none")  logSetLevel(LOG_NONE);
+    else if (a == "error") logSetLevel(LOG_ERROR);
+    else if (a == "warn")  logSetLevel(LOG_WARN);
+    else if (a == "info")  logSetLevel(LOG_INFO);
+    else if (a == "debug") logSetLevel(LOG_DEBUG);
+    else { Serial.println("Invalid level. Use: none, error, warn, info, debug"); return; }
+    Serial.printf("Log level set to: %s\n", a.c_str());
 }
 
 void SerialCLI::cmdReboot() {

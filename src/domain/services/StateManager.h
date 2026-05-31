@@ -11,6 +11,8 @@ class MotionService;
 class ToolRepository;
 class LogRepository;
 
+#include "MatchingService.h"
+
 class StateManager {
 public:
     StateManager(EventBus* events);
@@ -53,6 +55,7 @@ private:
     LogRepository* logRepo;
     
     BoxState boxState;
+    MatchingService matchingService;
     unsigned long stateStartTime;
     
     void transition(BoxStateMachine newState);

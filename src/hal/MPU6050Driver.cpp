@@ -1,5 +1,6 @@
 #include "MPU6050Driver.h"
 #include "Config.h"
+#include "InterruptManager.h"
 
 MPU6050Driver::MPU6050Driver(uint8_t addr) : addr(addr) {
     accelOffX = accelOffY = accelOffZ = 0.0f;
@@ -7,11 +8,16 @@ MPU6050Driver::MPU6050Driver(uint8_t addr) : addr(addr) {
 }
 
 bool MPU6050Driver::begin() {
+    i2cLock();
     Wire.begin(PIN_MPU_SDA, PIN_MPU_SCL);
     Wire.setClock(400000);
-    
+    Wire.setTimeOut(50);
+
     // Check WHO_AM_I
-    if (readRegister(0x75) != 0x68) {
+    uint8_t whoami = readRegister(0x75);
+    if (whoami != 0x68) {
+        Wire.end();
+        i2cUnlock();
         return false;
     }
     
@@ -34,17 +40,19 @@ bool MPU6050Driver::begin() {
     // Enable interrupt pin
     writeRegister(0x37, 0x80);   // INT_PIN_CFG: open drain, active low
     writeRegister(0x38, 0x01);  // INT_ENABLE: data ready enable
-    
+
+    i2cUnlock();
     return true;
 }
 
-void MPU6050Driver::readRaw(int16_t& ax, int16_t& ay, int16_t& az, 
+void MPU6050Driver::readRaw(int16_t& ax, int16_t& ay, int16_t& az,
                            int16_t& gx, int16_t& gy, int16_t& gz) {
+    i2cLock();
     Wire.beginTransmission(addr);
     Wire.write(0x3B);
     Wire.endTransmission(false);
     Wire.requestFrom(addr, 14);
-    
+
     ax = Wire.read() << 8 | Wire.read();
     ay = Wire.read() << 8 | Wire.read();
     az = Wire.read() << 8 | Wire.read();
@@ -53,6 +61,7 @@ void MPU6050Driver::readRaw(int16_t& ax, int16_t& ay, int16_t& az,
     gx = Wire.read() << 8 | Wire.read();
     gy = Wire.read() << 8 | Wire.read();
     gz = Wire.read() << 8 | Wire.read();
+    i2cUnlock();
 }
 
 void MPU6050Driver::readAccel(float& ax, float& ay, float& az) {
@@ -84,7 +93,7 @@ void MPU6050Driver::setAccelRange(uint8_t range) {
     writeRegister(0x1C, value << 3);  // ACCEL_CONFIG
 }
 
-void MPU6050Driver::setGyroRange(uint8_t range) {
+void MPU6050Driver::setGyroRange(uint16_t range) {
     uint8_t value;
     switch (range) {
         case 250:  value = 0; gyroScale = 131.0f; break;
@@ -159,16 +168,21 @@ bool MPU6050Driver::testConnection() {
 }
 
 void MPU6050Driver::writeRegister(uint8_t reg, uint8_t value) {
+    i2cLock();
     Wire.beginTransmission(addr);
     Wire.write(reg);
     Wire.write(value);
     Wire.endTransmission();
+    i2cUnlock();
 }
 
 uint8_t MPU6050Driver::readRegister(uint8_t reg) {
+    i2cLock();
     Wire.beginTransmission(addr);
     Wire.write(reg);
     Wire.endTransmission(false);
     Wire.requestFrom(addr, 1);
-    return Wire.read();
+    uint8_t result = Wire.read();
+    i2cUnlock();
+    return result;
 }

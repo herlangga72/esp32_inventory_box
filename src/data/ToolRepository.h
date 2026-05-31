@@ -35,6 +35,7 @@ private:
     void loadCache();
     void saveCache();
     char* getKey(int id, char* buffer);
+    Tool deserializeLegacy(const char* buffer);
 };
 
 #endif // TOOL_REPOSITORY_H

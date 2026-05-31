@@ -110,7 +110,7 @@ async function loadWifiStatus() {
         }
         
         document.getElementById('wifi-current-ssid').textContent = data.ssid || '--';
-        document.getElementById('wifi-current-rssi').textContent = data.rssi + ' dBm' || '--';
+        document.getElementById('wifi-current-rssi').textContent = (data.rssi || '--') + ' dBm';
         document.getElementById('wifi-current-ip').textContent = data.ip || '--';
         
     } catch (err) {
