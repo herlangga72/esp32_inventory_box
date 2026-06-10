@@ -2,48 +2,23 @@
 #define USER_REPOSITORY_H
 
 #include <Arduino.h>
-#include <vector>
 #include "../domain/entities/User.h"
-#include "StorageManager.h"
-#include "config/Config.h"
+#include "../kernel/ServiceRegistry.h"
 
-class UserRepository {
-public:
-    UserRepository(StorageManager* storage);
-    
-    // CRUD
-    int create(User* user);
-    bool update(int id, User* user);
-    bool remove(int id);
-    User* findById(int id);
-    
-    // Query
-    std::vector<User> findAll();
-    std::vector<User> findActive();
-    int count();
-    
-    // Authentication
-    User* authenticate(const char* pin);
-    User* findByFingerprintId(int fpId);
-    
-    // Stats
-    void recordUsage(int userId, unsigned long durationSeconds);
-    void recordPlacement(int userId);
-    void recordRemoval(int userId);
-    void resetStats(int userId);
-    
-    // Serialization
-    void serialize(const User& user, char* buffer, size_t len);
-    User deserialize(const char* buffer);
+class StorageManager;
 
-private:
-    StorageManager* storage;
-    User cache[Config::MAX_USERS];
-    bool cacheValid;
-    
-    void invalidateCache();
-    void loadCache();
-    User deserializeLegacy(const char* buffer);
-};
+// Free functions on UserRepositoryMemory*
+void ur_init(UserRepositoryMemory* mem, StorageManager* storage);
+int  ur_create(UserRepositoryMemory* mem, StorageManager* storage, User* user);
+bool ur_update(UserRepositoryMemory* mem, StorageManager* storage, int id, User* user);
+bool ur_remove(UserRepositoryMemory* mem, StorageManager* storage, int id);
+User* ur_findById(UserRepositoryMemory* mem, StorageManager* storage, int id);
+int  ur_findAll(UserRepositoryMemory* mem, StorageManager* storage, User* outBuf, int maxUsers);
+int  ur_count(UserRepositoryMemory* mem, StorageManager* storage);
+User* ur_authenticate(UserRepositoryMemory* mem, StorageManager* storage, const char* pin);
+User* ur_findByFingerprintId(UserRepositoryMemory* mem, StorageManager* storage, int fpId);
 
-#endif // USER_REPOSITORY_H
+void ur_serialize(const User& user, char* buffer, size_t len);
+User ur_deserialize(const char* buffer);
+
+#endif

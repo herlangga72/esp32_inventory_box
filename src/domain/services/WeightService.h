@@ -2,56 +2,14 @@
 #define WEIGHT_SERVICE_H
 
 #include <Arduino.h>
-#include "../hal/HX711Driver.h"
-#include "../events/EventBus.h"
-#include "config/Config.h"
+#include "../../kernel/ServiceRegistry.h"
+#include "../../hal/HX711Driver.h"
 
-class WeightService {
-public:
-    WeightService(HX711Driver* driver);
-    
-    void begin();
-    void update();
-    
-    float getCurrentWeight();
-    float getBaseline();
-    float getDelta();
-    void setBaseline(float baseline);
-    
-    void startCalibration(int samples = 50);
-    bool isCalibrating();
-    bool isCalibrationComplete();
-    float getCalibrationResult();
-    
-    void onRawReading(int32_t raw);
-    void tare();
-    
-    // Config
-    void setCalibrationFactor(float factor);
-    float getCalibrationFactor();
+// Free functions on WeightServiceMemory*
+void ws_onRawReading(WeightServiceMemory* mem, int32_t raw);
+void ws_update(WeightServiceMemory* mem);
+float ws_getCurrentWeight(const WeightServiceMemory* mem);
+float ws_getBaseline(const WeightServiceMemory* mem);
+float ws_getDelta(const WeightServiceMemory* mem);
 
-private:
-    HX711Driver* hx711;
-    
-    // Filtering
-    static const uint8_t FILTER_SIZE = Config::FILTER_SIZE;
-    float readings[FILTER_SIZE];
-    uint8_t filterIndex;
-    float filterSum;
-    
-    float baseline;
-    float currentWeight;
-    float previousWeight;
-    float calibrationFactor;
-    
-    // Calibration
-    bool calibrating;
-    int calibrationSamples;
-    int totalCalSamples;
-    float calibrationSum;
-    
-    float applyMovingAverage(int32_t raw);
-    void processWeight();
-};
-
-#endif // WEIGHT_SERVICE_H
+#endif

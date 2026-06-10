@@ -7,8 +7,6 @@
 #include "../data/LogRepository.h"
 
 extern StorageManager storage;
-extern ToolRepository toolRepo;
-extern UserRepository userRepo;
 extern LogRepository logRepo;
 
 SerialCLI::SerialCLI() : buffer("") {}
@@ -95,8 +93,8 @@ void SerialCLI::cmdStatus() {
     Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
     Serial.printf("CPU Freq: %d MHz\n", ESP.getCpuFreqMHz());
     Serial.printf("WiFi RSSI: %d dBm\n", WiFi.RSSI());
-    Serial.printf("Tool Count: %d\n", toolRepo.count());
-    Serial.printf("User Count: %d\n", userRepo.count());
+    Serial.printf("Tool Count: %d\n", tr_count(g_registry.getToolRepository(), &storage));
+    Serial.printf("User Count: %d\n", ur_count(g_registry.getUserRepository(), &storage));
     Serial.printf("Log Count: %d\n", logRepo.count());
     Serial.printf("Baseline: %.1f g\n", storage.getFloat("baseline", 0));
 }
@@ -107,14 +105,15 @@ void SerialCLI::cmdCalibrate() {
 
 void SerialCLI::cmdTools() {
     Serial.println("\n=== Tools ===");
-    auto tools = toolRepo.findAll();
-    
-    if (tools.empty()) {
+    Tool tools[Config::MAX_TOOLS];
+    int toolCount = tr_findAll(g_registry.getToolRepository(), &storage, tools, Config::MAX_TOOLS);
+
+    if (toolCount == 0) {
         Serial.println("No tools registered.");
         return;
     }
-    
-    for (auto& tool : tools) {
+
+    for (int ti = 0; ti < toolCount; ti++) { auto& tool = tools[ti];
         Serial.printf("  [%d] %s - %.1fg %s\n",
             tool.id,
             tool.name,
@@ -126,14 +125,15 @@ void SerialCLI::cmdTools() {
 
 void SerialCLI::cmdUsers() {
     Serial.println("\n=== Users ===");
-    auto users = userRepo.findAll();
-    
-    if (users.empty()) {
+    User users[Config::MAX_USERS];
+    int userCount = ur_findAll(g_registry.getUserRepository(), &storage, users, Config::MAX_USERS);
+
+    if (userCount == 0) {
         Serial.println("No users registered.");
         return;
     }
-    
-    for (auto& user : users) {
+
+    for (int ui = 0; ui < userCount; ui++) { auto& user = users[ui];
         Serial.printf("  [%d] %s (PIN: %s) %s\n",
             user.id,
             user.name,
@@ -145,17 +145,19 @@ void SerialCLI::cmdUsers() {
 
 void SerialCLI::cmdLogs() {
     Serial.println("\n=== Recent Logs ===");
-    auto logs = logRepo.findAll(20, 0);
+    LogEntry logBuf[20];
+    int logCount = logRepo.findAll(logBuf, 20, 20, 0);
 
     const char* lvl[] = {"NONE", "ERR", "WARN", "INFO", "DBG"};
-    if (logs.empty()) {
+    if (logCount == 0) {
         Serial.println("No logs.");
         return;
     }
 
-    for (auto& entry : logs) {
+    for (int i = 0; i < logCount; i++) {
+        auto& entry = logBuf[i];
         Serial.printf("  [%lu] [%s] [%s] %s\n",
-            entry.timestamp,
+            (unsigned long)entry.timestamp,
             (entry.severity >= 0 && entry.severity <= 4) ? lvl[entry.severity] : "?",
             entry.event,
             entry.message

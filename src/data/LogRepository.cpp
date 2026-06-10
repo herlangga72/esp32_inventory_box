@@ -1,64 +1,63 @@
 #include "LogRepository.h"
 #include "../utils/LogFile.h"
 #include "../utils/LogManager.h"
-#include <string.h>
+#include <cstring>
+#include <cstdlib>
 
 LogRepository::LogRepository() {}
 
-std::vector<LogEntry> LogRepository::findFiltered(int limit, int offset,
-                                                   int minLevel, const char* tag) {
-    std::vector<LogEntry> results;
+struct CbData {
+    LogEntry* buf;
+    int bufSize;
+    int minLevel;
+    const char* tag;
+    LogRepository* repo;
+    int written;
+    int limit;
+};
 
-    // We need a callback to accumulate results
-    struct CallbackData {
-        std::vector<LogEntry>* results;
-        int minLevel;
-        const char* tag;
-        LogRepository* repo;
-        int returned;
-        int limit;
-    };
+static void filterCallback(const char* line, void* arg) {
+    CbData* d = (CbData*)arg;
+    if (d->written >= d->limit || d->written >= d->bufSize) return;
 
-    CallbackData cbData;
-    cbData.results = &results;
-    cbData.minLevel = minLevel;
-    cbData.tag = tag;
-    cbData.repo = this;
-    cbData.returned = 0;
-    cbData.limit = limit;
+    LogEntry entry = d->repo->parseCSVLine(line);
 
-    logFileRead(offset, limit,
-        [](const char* line, void* arg) {
-            CallbackData* d = (CallbackData*)arg;
-            if (d->returned >= d->limit) return;
+    if (entry.severity < d->minLevel) return;
+    if (d->tag && d->tag[0] && strcmp(entry.event, d->tag) != 0) return;
 
-            LogEntry entry = d->repo->parseCSVLine(String(line));
-
-            // Filter by level
-            if (entry.severity < d->minLevel) return;
-
-            // Filter by tag (tag is stored in entry.event)
-            if (d->tag && d->tag[0] && strcmp(entry.event, d->tag) != 0) return;
-
-            d->results->push_back(entry);
-            d->returned++;
-        },
-        &cbData
-    );
-
-    return results;
+    d->buf[d->written++] = entry;
 }
 
-std::vector<LogEntry> LogRepository::findAll(int limit, int offset) {
-    return findFiltered(limit, offset, 0, nullptr);
+int LogRepository::findFiltered(LogEntry* buf, int bufSize, int limit, int offset,
+                                 int minLevel, const char* tag) {
+    CbData d;
+    d.buf = buf;
+    d.bufSize = bufSize;
+    d.minLevel = minLevel;
+    d.tag = tag;
+    d.repo = this;
+    d.written = 0;
+    d.limit = limit;
+
+    logFileRead(offset, limit, filterCallback, &d);
+    return d.written;
+}
+
+int LogRepository::findAll(LogEntry* buf, int bufSize, int limit, int offset) {
+    return findFiltered(buf, bufSize, limit, offset, 0, nullptr);
 }
 
 int LogRepository::count() {
     return logFileCount();
 }
 
-String LogRepository::downloadCSV() {
-    return logFileGetAll();
+int LogRepository::downloadCSV(char* buf, int maxLen) {
+    String csv = logFileGetAll();
+    int len = csv.length();
+    if (len >= maxLen) len = maxLen - 1;
+    memcpy(buf, csv.c_str(), len);
+    buf[len] = '\0';
+    return len;
 }
 
 void LogRepository::clear() {
@@ -73,40 +72,37 @@ size_t LogRepository::fileSize() {
     return logFileSize();
 }
 
-LogEntry LogRepository::parseCSVLine(const String& line) {
+// Parse CSV line without String heap — uses char* directly
+LogEntry LogRepository::parseCSVLine(const char* line) {
     LogEntry entry;
+    if (!line || !line[0]) return entry;
+
+    char buf[256];
+    strncpy(buf, line, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
 
     // Parse: timestamp,level,tag,"message"
-    int pos = 0;
+    char* p = buf;
+    char* next = nullptr;
 
     // Timestamp
-    int comma1 = line.indexOf(',', pos);
-    if (comma1 > 0) {
-        entry.timestamp = line.substring(pos, comma1).toInt();
-        pos = comma1 + 1;
-    }
+    char* comma = strchr(p, ',');
+    if (comma) { *comma = '\0'; entry.timestamp = atol(p); p = comma + 1; }
 
-    // Level (severity)
-    int comma2 = line.indexOf(',', pos);
-    if (comma2 > 0) {
-        entry.severity = line.substring(pos, comma2).toInt();
-        pos = comma2 + 1;
-    }
+    // Level
+    comma = strchr(p, ',');
+    if (comma) { *comma = '\0'; entry.severity = atoi(p); p = comma + 1; }
 
-    // Tag -> event field
-    int comma3 = line.indexOf(',', pos);
-    if (comma3 > 0) {
-        entry.setEvent(line.substring(pos, comma3).c_str());
-        pos = comma3 + 1;
-    }
+    // Tag (event field)
+    comma = strchr(p, ',');
+    if (comma) { *comma = '\0'; entry.setEvent(p); p = comma + 1; }
 
-    // Message (quoted) -> message field
-    if (pos < (int)line.length() && line[pos] == '"') {
-        pos++; // skip opening quote
-        int endQuote = line.lastIndexOf('"');
-        if (endQuote > pos) {
-            entry.setMessage(line.substring(pos, endQuote).c_str());
-        }
+    // Message (quoted)
+    if (*p == '"') {
+        p++;
+        char* endQuote = strrchr(p, '"');
+        if (endQuote) *endQuote = '\0';
+        entry.setMessage(p);
     }
 
     return entry;

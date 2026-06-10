@@ -19,6 +19,8 @@ public:
     // String
     String getString(const char* key, const char* defaultValue = "");
     void putString(const char* key, const char* value);
+    // Heap-free: fills caller buffer, returns length (0 if not found)
+    size_t getChars(const char* key, char* buf, size_t maxLen);
     
     // Bool
     bool getBool(const char* key, bool defaultValue = false);

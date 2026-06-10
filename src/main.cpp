@@ -4,41 +4,48 @@
 #include <ArduinoOTA.h>
 #endif
 
+#include <freertos/event_groups.h>
 #include "config/Config.h"
+#include "kernel/ServiceRegistry.h"
+#include "kernel/SystemStatus.h"
+#include "kernel/PowerManager.h"
+#include "kernel/WiFiManager.h"
+#include "kernel/ServerClient.h"
+// HAL drivers: HX711/MPU6050/SSD1306 pure ESP-IDF.
+// GPIO/Serial/Timer: keep Arduino for now (file still needs Arduino.h for WiFi/OTA/String).
 #include "hal/HX711Driver.h"
 #include "hal/MPU6050Driver.h"
 #include "hal/SSD1306Driver.h"
 #include "hal/InterruptManager.h"
 #include "hal/FingerprintDriver.h"
-
 #include "data/StorageManager.h"
 #include "data/ToolRepository.h"
 #include "data/UserRepository.h"
 #include "data/LogRepository.h"
-
-#include "domain/events/EventBus.h"
 #include "domain/services/WeightService.h"
 #include "domain/services/MotionService.h"
 #include "domain/services/StateManager.h"
 #include "domain/services/AccessController.h"
 #include "domain/services/DoorService.h"
-
 #include "presentation/WebServer.h"
 #include "presentation/DisplayManager.h"
 #ifndef RELEASE_BUILD
 #include "presentation/SerialCLI.h"
 #endif
-#include "kernel/PowerManager.h"
-#include "kernel/WiFiManager.h"
-#include "kernel/SystemStatus.h"
-#include "kernel/ServerClient.h"
 #include "utils/LogManager.h"
 #ifndef RELEASE_BUILD
 #include <ESPmDNS.h>
 #endif
-#include <functional>
 
-// Task handles
+// ---- Dual-core boot sync ----
+#define BOOT_I2C_DONE    (1 << 0)  // Core 0: MPU6050 + Display complete
+#define BOOT_FP_GO       (1 << 1)  // Core 1: Core 0 may start Fingerprint
+#define BOOT_FP_DONE     (1 << 2)  // Core 0: Fingerprint complete
+
+// Forward declared — defined after globals + initWithRetry template
+static void bootCore0Worker(void* arg);
+
+// Task handles — stored in registry SCBs, but we keep local refs for creation
 TaskHandle_t weightTaskHandle = NULL;
 TaskHandle_t motionTaskHandle = NULL;
 TaskHandle_t stateTaskHandle = NULL;
@@ -47,32 +54,22 @@ TaskHandle_t displayTaskHandle = NULL;
 TaskHandle_t wifiTaskHandle = NULL;
 TaskHandle_t accessTaskHandle = NULL;
 
-// Global instances
-StorageManager storage;
+// HAL drivers — live in registry HAL pool
 HX711Driver hx711(PIN_HX711_DT, PIN_HX711_SCK, PIN_HX711_DRDY);
 MPU6050Driver mpu;
 SSD1306Driver display(PIN_DISPLAY_SDA, PIN_DISPLAY_SCL, PIN_DISPLAY_RST);
 
-ToolRepository toolRepo(&storage);
-UserRepository userRepo(&storage);
-LogRepository logRepo;
+// Storage (NVS wrapper) — lives on stack, heap-allocates Preferences internally (unavoidable)
+StorageManager storage;
 
-EventBus* eventBus = EventBus::getInstance();
-WeightService weightService(&hx711);
-MotionService motionService(&mpu);
-StateManager stateManager(eventBus);
-
-WebServerManager webServer(eventBus);
+// PowerManager + WiFiManager — need to persist for loop() access
 PowerManager powerManager;
 WiFiManager wifiManager;
-SystemStatus& systemStatus = SystemStatus::getInstance();
-DisplayManager displayManager(&display, eventBus);
 
-// Access control
+// Access control hardware
 FingerprintDriver fpDriver;
 ServerClient serverClient;
-AccessController accessController(eventBus);
-DoorService doorService(eventBus);
+
 #ifndef RELEASE_BUILD
 SerialCLI cli;
 #endif
@@ -88,13 +85,10 @@ const int PRIORITY_WIFI = 6;
 
 // ============= INIT HELPERS =============
 
-/**
- * Initialize a component with retry on failure.
- * On success: markOK. On retry exhaustion: markError with "DISABLED" prefix.
- * Returns true if component initialized successfully.
- */
-bool initWithRetry(const char* name, std::function<bool()> initFn,
-                   const char* errorMsg, int maxRetries = 3, int retryDelayMs = 1000) {
+template<typename F>
+bool initWithRetry(const char* name, F initFn,
+                   const char* errorMsg, int maxRetries = 3, int baseDelayMs = 200) {
+    auto* ss = g_registry.getSystemStatus();
     LOG_INFO("INIT", "Initializing %s (max %d retries)...", name, maxRetries);
 
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
@@ -104,29 +98,59 @@ bool initWithRetry(const char* name, std::function<bool()> initFn,
             } else {
                 LOG_INFO("INIT", "%s: OK", name);
             }
-            systemStatus.markOK(name);
+            ss_markOK(ss, name);
             return true;
         }
 
         if (attempt < maxRetries) {
+            // Adaptive backoff: 1×, 2×, 4× base delay (capped at 2s)
+            int delayMs = baseDelayMs * (1 << attempt);
+            if (delayMs > 2000) delayMs = 2000;
             LOG_WARN("INIT", "%s: FAILED — retry %d/%d in %dms...",
-                     name, attempt + 1, maxRetries, retryDelayMs);
-            delay(retryDelayMs); yield();
+                     name, attempt + 1, maxRetries, delayMs);
+            delay(delayMs); yield();
         }
     }
 
-    // All retries exhausted — permanently disable
     char disabledMsg[128];
     snprintf(disabledMsg, sizeof(disabledMsg), "DISABLED (exceeded %d retries) — %s",
              maxRetries, errorMsg);
-    systemStatus.markError(name, disabledMsg);
+    ss_markError(ss, name, disabledMsg);
     LOG_ERROR("INIT", "%s: %s", name, disabledMsg);
     return false;
 }
 
-// Dynamic task delay — reads operational mode
+// ---- Dual-core boot worker (Core 0) ----
+// Runs I2C sensors then Fingerprint in parallel with Core 1's init.
+static void bootCore0Worker(void* arg) {
+    EventGroupHandle_t sync = (EventGroupHandle_t)arg;
+
+    // Phase 1: I2C sensors (parallel with Core 1's Storage+HX711)
+    initWithRetry("MPU6050", [](){ return mpu.begin(); },
+        "I2C address 0x68 not found - check wiring", 3, 200);
+
+    initWithRetry("Display", [](){
+        display.init();
+        delay(50);
+        return display.isInitialized();
+    }, "I2C address 0x3C not found - check wiring", 2, 300);
+
+    xEventGroupSetBits(sync, BOOT_I2C_DONE);
+
+    // Wait for Core 1 signal to start Fingerprint
+    xEventGroupWaitBits(sync, BOOT_FP_GO, pdFALSE, pdTRUE, portMAX_DELAY);
+
+    // Phase 2: Fingerprint (parallel with Core 1's Door+Server+Access)
+    initWithRetry("Fingerprint", [](){ return fpDriver.begin(); },
+        "No sensor on UART2 (RX=5, TX=4) - check wiring", 3, 300);
+
+    xEventGroupSetBits(sync, BOOT_FP_DONE);
+    vTaskDelete(NULL);
+}
+
+// Dynamic task delay — reads operational mode from registry
 inline TickType_t opDelay(int apMs, int staMs) {
-    return (SystemStatus::getInstance().getOperationalMode() == OperationalMode::OP_AP_FULL)
+    return (ss_getOperationalMode(g_registry.getSystemStatus()) == OperationalMode::OP_AP_FULL)
         ? pdMS_TO_TICKS(apMs)
         : pdMS_TO_TICKS(staMs);
 }
@@ -137,8 +161,10 @@ inline TickType_t opDelay(int apMs, int staMs) {
 #define SENSOR_RETRY_DELAY_MS 5000
 
 void weightTask(void* param) {
-    // Retry loop if HX711 failed at boot
-    if (systemStatus.getStatus("HX711") == ComponentStatus::ERROR) {
+    auto* mem = g_registry.getWeightService();
+    auto* ss = g_registry.getSystemStatus();
+
+    if (ss_getStatus(ss, "HX711") == ComponentStatus::ERROR) {
         for (int retry = 1; retry <= SENSOR_RETRY_COUNT; retry++) {
             LOG_WARN("WEIGHT", "HX711 init failed, retry %d/%d", retry, SENSOR_RETRY_COUNT);
             vTaskDelay(pdMS_TO_TICKS(SENSOR_RETRY_DELAY_MS));
@@ -146,13 +172,13 @@ void weightTask(void* param) {
             delay(100);
             int32_t testRead = hx711.readRaw();
             if (testRead != INT32_MIN && testRead != 0) {
-                systemStatus.markOK("HX711");
+                ss_markOK(ss, "HX711");
                 LOG_INFO("WEIGHT", "HX711 recovered on retry %d", retry);
                 goto weight_start;
             }
         }
         LOG_ERROR("WEIGHT", "HX711 unrecoverable after %d retries", SENSOR_RETRY_COUNT);
-        systemStatus.markError("HX711", "Unrecoverable — task exiting");
+        ss_markError(ss, "HX711", "Unrecoverable — task exiting");
         vTaskDelete(NULL);
         return;
     }
@@ -161,77 +187,115 @@ weight_start:
         if (InterruptManager::isHX711Ready()) {
             int32_t raw = hx711.readRaw();
             if (raw != INT32_MIN) {
-                weightService.onRawReading(raw);
+                ws_onRawReading(mem, raw);
             }
         }
-        weightService.update();
-        powerManager.onActivity();
+        ws_update(mem);  // drains mailbox + processes filter
+
+        g_registry.sendCmd(ServiceId::POWER,
+            static_cast<uint8_t>(KernelMsgType::ACTIVITY));
+        g_registry.heartbeat(ServiceId::WEIGHT_SERVICE);
         vTaskDelay(opDelay(TaskRate::AP_WEIGHT_MS, TaskRate::STA_WEIGHT_MS));
     }
 }
 
 void motionTask(void* param) {
-    // Retry loop if MPU6050 failed at boot
-    if (systemStatus.getStatus("MPU6050") == ComponentStatus::ERROR) {
+    auto* mem = g_registry.getMotionService();
+    auto* ss = g_registry.getSystemStatus();
+
+    if (ss_getStatus(ss, "MPU6050") == ComponentStatus::ERROR) {
         for (int retry = 1; retry <= SENSOR_RETRY_COUNT; retry++) {
             LOG_WARN("MOTION", "MPU6050 init failed, retry %d/%d", retry, SENSOR_RETRY_COUNT);
             vTaskDelay(pdMS_TO_TICKS(SENSOR_RETRY_DELAY_MS));
             if (mpu.begin()) {
-                systemStatus.markOK("MPU6050");
+                ss_markOK(ss, "MPU6050");
                 LOG_INFO("MOTION", "MPU6050 recovered on retry %d", retry);
                 goto motion_start;
             }
         }
         LOG_ERROR("MOTION", "MPU6050 unrecoverable after %d retries", SENSOR_RETRY_COUNT);
-        systemStatus.markError("MPU6050", "Unrecoverable — task exiting");
+        ss_markError(ss, "MPU6050", "Unrecoverable — task exiting");
         vTaskDelete(NULL);
         return;
     }
 motion_start:
     while (true) {
         if (InterruptManager::isMPUTriggered()) {
-            motionService.update();
-            MotionType motion = motionService.getCurrentMotion();
-            stateManager.onMotionDetected(motion);
-            if (powerManager.getCurrentState() == PM_DEEP_SLEEP) {
-                powerManager.handleWakeFromMotion();
-            }
+            ms_update(mem, &mpu);  // reads accel, sends MOTION_DETECTED to StateManager
+
+            g_registry.sendCmd(ServiceId::POWER,
+                static_cast<uint8_t>(KernelMsgType::MOTION_WAKE));
         }
+        g_registry.heartbeat(ServiceId::MOTION_SERVICE);
         vTaskDelay(opDelay(TaskRate::AP_MOTION_MS, TaskRate::STA_MOTION_MS));
     }
 }
 
 void stateTask(void* param) {
+    auto* mem = g_registry.getStateManager();
+    QueueHandle_t q = g_registry.scb[static_cast<uint8_t>(ServiceId::STATE_MANAGER)].inbox;
+
+    if (!q) {
+        LOG_ERROR("STATE", "No STATE_MANAGER mailbox — task exiting");
+        vTaskDelete(NULL);
+        return;
+    }
+
     while (true) {
-        stateManager.update();
-        vTaskDelay(opDelay(TaskRate::AP_STATE_MS, TaskRate::STA_STATE_MS));
+        ServiceMessage msg;
+        // Drain pending messages
+        while (xQueueReceive(q, &msg, 0) == pdTRUE) {
+            sm_dispatchMessage(mem, msg);
+        }
+
+        sm_updatePeriodic(mem);
+
+        // Block with timeout
+        TickType_t delayTicks = opDelay(TaskRate::AP_STATE_MS, TaskRate::STA_STATE_MS);
+        if (xQueueReceive(q, &msg, delayTicks) == pdTRUE) {
+            sm_dispatchMessage(mem, msg);
+            while (xQueueReceive(q, &msg, 0) == pdTRUE) {
+                sm_dispatchMessage(mem, msg);
+            }
+        }
+        sm_updatePeriodic(mem);
+        g_registry.heartbeat(ServiceId::STATE_MANAGER);
     }
 }
 
 void webTask(void* param) {
-    // Check if WebServer is working
-    if (systemStatus.getStatus("WebServer") == ComponentStatus::ERROR) {
+    auto* ss = g_registry.getSystemStatus();
+    if (ss_getStatus(ss, "WebServer") == ComponentStatus::ERROR) {
         LOG_INFO("INIT", "WebServer not available, task exiting");
         vTaskDelete(NULL);
         return;
     }
-    
+
     while (true) {
-        webServer.handle();
+        web_handle();
         vTaskDelay(opDelay(TaskRate::AP_WEB_MS, TaskRate::STA_WEB_MS));
     }
 }
 
 void displayTask(void* param) {
-    if (systemStatus.getStatus("Display") == ComponentStatus::ERROR) {
+    auto* ss = g_registry.getSystemStatus();
+    if (ss_getStatus(ss, "Display") == ComponentStatus::ERROR) {
         LOG_INFO("INIT", "Display not available, task exiting");
         vTaskDelete(NULL);
         return;
     }
 
+    auto* mem = g_registry.getDisplayManager();
     while (true) {
-        displayManager.update();
-        vTaskDelay(opDelay(TaskRate::AP_DISPLAY_MS, TaskRate::STA_DISPLAY_MS));
+        ServiceMessage msg;
+        while (g_registry.tryReceive(ServiceId::DISPLAY_MANAGER, msg)) {
+            dm_dispatchMessage(mem, msg);
+        }
+
+        dm_update(mem, &display);
+
+        TickType_t delayTicks = opDelay(TaskRate::AP_DISPLAY_MS, TaskRate::STA_DISPLAY_MS);
+        vTaskDelay(delayTicks);
     }
 }
 
@@ -251,15 +315,27 @@ void wifiTask(void* param) {
 }
 
 void accessTask(void* param) {
-    if (systemStatus.getStatus("Fingerprint") == ComponentStatus::ERROR) {
+    auto* ss = g_registry.getSystemStatus();
+    if (ss_getStatus(ss, "Fingerprint") == ComponentStatus::ERROR) {
         LOG_INFO("ACCESS", "Fingerprint sensor not available, task exiting");
         vTaskDelete(NULL);
         return;
     }
 
+    auto* acMem = g_registry.getAccessController();
+    auto* dsMem = g_registry.getDoorService();
+
     while (true) {
-        accessController.update();
-        doorService.update();
+        ServiceMessage msg;
+        while (g_registry.tryReceive(ServiceId::ACCESS_CONTROLLER, msg)) {
+            ac_dispatchMessage(acMem, msg, &fpDriver, &serverClient, dsMem);
+        }
+        while (g_registry.tryReceive(ServiceId::DOOR_SERVICE, msg)) {
+            ds_dispatchMessage(dsMem, msg);
+        }
+
+        ac_update(acMem, &fpDriver, &serverClient, dsMem);
+        ds_update(dsMem);
         serverClient.update();
         vTaskDelay(opDelay(TaskRate::AP_ACCESS_MS, TaskRate::STA_ACCESS_MS));
     }
@@ -268,18 +344,17 @@ void accessTask(void* param) {
 // ============= SETUP =============
 
 void setup() {
-    // Boot blink: 3 fast flashes = "I'm alive"
+    // Boot blink
     pinMode(PIN_LED, OUTPUT);
     for (int i = 0; i < 3; i++) {
         digitalWrite(PIN_LED, LOW);  delay(100); yield();
         digitalWrite(PIN_LED, HIGH); delay(100); yield();
     }
-    // Solid ON for 2 seconds — confirms stable boot
     digitalWrite(PIN_LED, LOW);
-    delay(2000); yield();
+    delay(100);
     digitalWrite(PIN_LED, HIGH);
 
-    // Hold BOOT button at power-on to force AP mode (clear WiFi credentials)
+    // Force AP mode if BOOT button held
     pinMode(PIN_BUTTON, INPUT_PULLUP);
     if (digitalRead(PIN_BUTTON) == LOW) {
         for (int i = 0; i < 5; i++) {
@@ -289,165 +364,166 @@ void setup() {
         storage.begin();
         storage.remove("wifi_ssid");
         storage.remove("wifi_pass");
-        digitalWrite(PIN_LED, LOW); // solid = AP forced
+        digitalWrite(PIN_LED, LOW);
     }
 
     Serial.begin(115200);
-    delay(100);
+    delay(10);
     logInit(2, 2560);
-    delay(100);
-    
+    delay(10);
+
     LOG_INFO("INIT", "");
     LOG_INFO("INIT", "===========================================");
     LOG_INFO("INIT", "ESP32 Inventory Box Starting...");
     LOG_INFO("INIT", "===========================================");
-    
-    // Initialize system status
-    systemStatus.begin();
-    systemStatus.setBootStage(BootStage::BS_STORAGE);
 
-    // ---- PRE-INIT I2C PULLUPS (prevent floating-line interrupt storms) ----
+    // ---- INIT REGISTRY ----
+    LOG_INFO("INIT", "Initializing Service Registry...");
+    g_registry.init();
+
+    // ---- INIT SYSTEM STATUS ----
+    ss_begin(g_registry.getSystemStatus());
+    ss_setBootStage(g_registry.getSystemStatus(), BootStage::BS_STORAGE);
+
+    // ---- PRE-INIT I2C PULLUPS ----
     pinMode(PIN_MPU_SDA, INPUT_PULLUP);
     pinMode(PIN_MPU_SCL, INPUT_PULLUP);
-    delay(5);
 
+    // ---- DUAL-CORE BOOT: parallel sensor init ----
+    EventGroupHandle_t bootSync = xEventGroupCreate();
+    xTaskCreatePinnedToCore(bootCore0Worker, "bootCore0", 3072,
+                            bootSync, 12, NULL, 0);
+    LOG_INFO("INIT", "Core 0 worker launched (I2C sensors)");
+
+    // === Core 1: Storage + HX711 (parallel with Core 0's I2C sensors) ===
     // ---- STORAGE ----
     initWithRetry("Storage", [&](){ return storage.begin(); },
-        "NVS initialization failed", 0);  // No retry — NVS fatal if fails
+        "NVS initialization failed", 0);
 
-    systemStatus.setBootStage(BootStage::BS_HX711);
+    ss_setBootStage(g_registry.getSystemStatus(), BootStage::BS_HX711);
 
     // ---- HX711 ----
     initWithRetry("HX711", [&](){
         hx711.begin();
-        delay(100);
+        delay(50);
         int32_t testRead = hx711.readRaw();
         return (testRead != INT32_MIN && testRead != 0);
-    }, "No response - check wiring (DT=16, SCK=17)", 3, 2000);
-    
-    systemStatus.setBootStage(BootStage::BS_MPU6050);
-    
-    // ---- MPU6050 ----
-    initWithRetry("MPU6050", [&](){ return mpu.begin(); },
-        "I2C address 0x68 not found - check wiring", 3, 1500);
+    }, "No response - check wiring (DT=16, SCK=17)", 3, 300);
 
-    systemStatus.setBootStage(BootStage::BS_DISPLAY);
+    // Wait for Core 0 to finish I2C sensors
+    ss_setBootStage(g_registry.getSystemStatus(), BootStage::BS_MPU6050);
+    ss_setBootStage(g_registry.getSystemStatus(), BootStage::BS_DISPLAY);
+    xEventGroupWaitBits(bootSync, BOOT_I2C_DONE, pdTRUE, pdTRUE, portMAX_DELAY);
+    LOG_INFO("INIT", "Phase 1 complete (all sensors)");
 
-    // ---- DISPLAY ----
-    initWithRetry("Display", [&](){
-        display.init();
-        delay(100);
-        return display.isInitialized();
-    }, "I2C address 0x3C not found - check wiring", 2, 2000);
-    
     // ---- INTERRUPTS ----
     LOG_INFO("INIT", "Configuring interrupts...");
     InterruptManager::begin();
     LOG_INFO("INIT", "Interrupts: OK");
 
-    // Disable interrupts for failed sensors (prevents storm on floating input-only pins)
-    if (systemStatus.getStatus("HX711") == ComponentStatus::ERROR) {
+    auto* ss = g_registry.getSystemStatus();
+    if (ss_getStatus(ss, "HX711") == ComponentStatus::ERROR) {
         gpio_isr_handler_remove((gpio_num_t)PIN_HX711_DRDY);
         gpio_set_direction((gpio_num_t)PIN_HX711_DRDY, GPIO_MODE_DISABLE);
         LOG_INFO("INIT", "HX711 interrupt disabled (sensor offline)");
     }
-    if (systemStatus.getStatus("MPU6050") == ComponentStatus::ERROR) {
+    if (ss_getStatus(ss, "MPU6050") == ComponentStatus::ERROR) {
         gpio_isr_handler_remove((gpio_num_t)PIN_MPU_INT);
         gpio_set_direction((gpio_num_t)PIN_MPU_INT, GPIO_MODE_DISABLE);
         LOG_INFO("INIT", "MPU6050 interrupt disabled (sensor offline)");
     }
-    
-    // ---- SERVICES ----
+
+    // ---- REGISTER MAILBOXES ----
+    LOG_INFO("INIT", "Registering service mailboxes...");
+    g_registry.registerMailbox(ServiceId::STATE_MANAGER,    32);
+    g_registry.registerMailbox(ServiceId::WEIGHT_SERVICE,   8);
+    g_registry.registerMailbox(ServiceId::ACCESS_CONTROLLER, 16);
+    g_registry.registerMailbox(ServiceId::DOOR_SERVICE,     8);
+    g_registry.registerMailbox(ServiceId::DISPLAY_MANAGER,  16);
+    g_registry.registerMailbox(ServiceId::POWER,            8);
+    g_registry.registerMailbox(ServiceId::MOTION_SERVICE,   4);
+
+    // ---- INIT SERVICES (from registry memory) ----
     LOG_INFO("INIT", "Initializing services...");
-    weightService.begin();
-    if (systemStatus.getStatus("MPU6050") != ComponentStatus::ERROR) {
-        motionService.begin();
+
+    // WeightService
+    auto* wm = g_registry.getWeightService();
+    wm->calibrationFactor = Config::CALIBRATION_FACTOR;
+    wm->filterSize = Config::FILTER_SIZE;
+    hx711.begin();
+
+    if (ss_getStatus(ss, "MPU6050") != ComponentStatus::ERROR) {
+        auto* mm = g_registry.getMotionService();
+        mm->initialized = 1;
+        mpu.readAccel(mm->restingAccel[0], mm->restingAccel[1], mm->restingAccel[2]);
+        mm->restingAccel[2] -= 1.0f;
     } else {
         LOG_INFO("INIT", "MotionService: SKIPPED (MPU6050 disabled)");
     }
-    
+
     // Load saved baseline
     float savedBaseline = storage.getFloat("baseline", 0.0f);
     if (savedBaseline > 0) {
-        weightService.setBaseline(savedBaseline);
-        stateManager.setBaseline(savedBaseline);
+        wm->baseline = savedBaseline;
+        g_registry.getStateManager()->baselineGrams = savedBaseline;
         LOG_INFO("INIT", "Loaded baseline: %.1f g", savedBaseline);
     }
-    
-    // Calibrate motion baseline (don't fail if MPU6050 is down)
-    if (systemStatus.getStatus("MPU6050") != ComponentStatus::ERROR) {
-        motionService.calibrateBaseline();
-    }
 
-    delay(50);  // Let logger task drain retry-spam from queue
+    // Init StateManager
+    auto* sm = g_registry.getStateManager();
+    sm_init(sm, &storage);
 
-    // Initialize managers
-    stateManager.begin();
-    stateManager.setWeightService(&weightService);
-    stateManager.setMotionService(&motionService);
-    stateManager.setToolRepository(&toolRepo);
-    stateManager.setLogRepository(&logRepo);
-    
-    // Initialize power manager (skip wake sources if MPU6050 disabled — GPIO35 floats)
-    LOG_INFO("INIT", "powerManager...");
+    // Init repositories
+    tr_init(g_registry.getToolRepository(), &storage);
+    // ur_init, lr_init...
+
+    // Init PowerManager
     powerManager.setBaseline(savedBaseline);
-    if (systemStatus.getStatus("MPU6050") != ComponentStatus::ERROR) {
+    if (ss_getStatus(ss, "MPU6050") != ComponentStatus::ERROR) {
         powerManager.begin(true);
     } else {
-        // Skip setupWakeSources() — GPIO35 floats when MPU6050 absent, locks up CPU
         powerManager.begin(false);
     }
-    systemStatus.setBootStage(BootStage::BS_WIFI);
+
+    ss_setBootStage(ss, BootStage::BS_WIFI);
 
     // ---- WIFI ----
     LOG_INFO("INIT", "Initializing WiFi...");
     wifiManager.begin();
     LOG_INFO("INIT", "WiFi init complete");
-    
+
     if (wifiManager.isAPMode()) {
-        systemStatus.markWarning("WiFi", "No credentials stored - AP mode active");
+        ss_markWarning(ss, "WiFi", "No credentials stored - AP mode active");
         LOG_INFO("INIT", "WiFi: WARNING - AP mode (no credentials)");
     } else if (wifiManager.isConnected()) {
-        systemStatus.markOK("WiFi");
-        LOG_INFO("INIT", "WiFi: OK - %s (%d dBm)", wifiManager.getSSID().c_str(), wifiManager.getRSSI());
+        ss_markOK(ss, "WiFi");
+        LOG_INFO("INIT", "WiFi: OK - %s (%d dBm)", wifiManager.getSSID(), wifiManager.getRSSI());
     } else {
-        systemStatus.markError("WiFi", "Connection failed");
+        ss_markError(ss, "WiFi", "Connection failed");
         LOG_INFO("INIT", "WiFi: FAILED - Connection failed");
     }
-    
-    systemStatus.setBootStage(BootStage::BS_WEB_SERVER);
-    
+
+    ss_setBootStage(ss, BootStage::BS_WEB_SERVER);
+
     // ---- WEB SERVER ----
-    // In AP mode, configPortal handles web — skip main WebServer to avoid port 80 conflict
     if (!wifiManager.isAPMode()) {
         LOG_INFO("INIT", "Starting Web Server...");
-        webServer.begin();
-        webServer.setStateManager(&stateManager);
-        webServer.setToolRepository(&toolRepo);
-        webServer.setUserRepository(&userRepo);
-        webServer.setLogRepository(&logRepo);
-        webServer.setWeightService(&weightService);
-        webServer.setWiFiManager(&wifiManager);
-        webServer.setSystemStatus(&systemStatus);
-        webServer.setAccessController(&accessController);
-        webServer.setServerClient(&serverClient);
-        systemStatus.markOK("WebServer");
+        web_begin();
+        ss_markOK(ss, "WebServer");
         LOG_INFO("INIT", "WebServer: OK");
     } else {
         LOG_INFO("INIT", "WebServer: SKIPPED (AP mode - configPortal active)");
     }
 
-    systemStatus.setBootStage(BootStage::BS_FINGERPRINT);
+    ss_setBootStage(ss, BootStage::BS_FINGERPRINT);
 
-    // ---- FINGERPRINT ----
-    initWithRetry("Fingerprint", [&](){ return fpDriver.begin(); },
-        "No sensor on UART2 (RX=5, TX=4) - check wiring", 3, 2000);
-
-    systemStatus.setBootStage(BootStage::BS_ACCESS_SERVER);
+    // ---- FINGERPRINT (runs on Core 0 in parallel with WiFi) ----
+    // Signal Core 0 to start fingerprint init
+    xEventGroupSetBits(bootSync, BOOT_FP_GO);
 
     // ---- DOOR SERVICE ----
-    doorService.begin();
-    systemStatus.markOK("Door");
+    ds_begin(g_registry.getDoorService());
+    ss_markOK(ss, "Door");
     LOG_INFO("INIT", "Door: OK");
 
     // ---- SERVER CLIENT ----
@@ -455,27 +531,23 @@ void setup() {
     String serverToken = storage.getString("cfg_server_token", "");
     if (serverUrl.length() > 0) {
         serverClient.begin(serverUrl.c_str(), serverToken.length() > 0 ? serverToken.c_str() : nullptr);
-        systemStatus.markOK("ServerClient");
+        ss_markOK(ss, "ServerClient");
     } else {
-        systemStatus.markWarning("ServerClient", "No server URL configured");
+        ss_markWarning(ss, "ServerClient", "No server URL configured");
     }
-    LOG_INFO("INIT", "ServerClient: %s",
-             serverUrl.length() > 0 ? serverUrl.c_str() : "(not configured)");
 
     // ---- ACCESS CONTROLLER ----
-    accessController.setFingerprintDriver(&fpDriver);
-    accessController.setServerClient(&serverClient);
-    accessController.setDoorService(&doorService);
-    accessController.setUserRepository(&userRepo);
-    accessController.setStorageManager(&storage);
-    accessController.begin();
-    systemStatus.markOK("AccessController");
+    auto* ac = g_registry.getAccessController();
+    ac_init(ac);
+    ss_markOK(ss, "AccessController");
     LOG_INFO("INIT", "AccessController: OK");
 
     // ---- DISPLAY MANAGER ----
-    if (systemStatus.getStatus("Display") != ComponentStatus::ERROR) {
+    if (ss_getStatus(ss, "Display") != ComponentStatus::ERROR) {
+        auto* dm = g_registry.getDisplayManager();
+        dm->healthy = display.isInitialized();
+        dm->awake = true;
         LOG_INFO("INIT", "DisplayManager heap=%d", ESP.getFreeHeap());
-        displayManager.init();
     } else {
         LOG_INFO("INIT", "DisplayManager: SKIPPED (display offline)");
     }
@@ -496,7 +568,6 @@ void setup() {
     ArduinoOTA.begin();
     LOG_INFO("INIT", "OTA ready");
 
-    // ---- SERIAL CLI ----
     cli.begin();
 #endif
 
@@ -505,81 +576,106 @@ void setup() {
     LOG_INFO("INIT", "===========================================");
     if (wifiManager.isAPMode()) {
         LOG_INFO("INIT", "WiFi AP MODE ACTIVE");
-        LOG_INFO("INIT", "SSID: %s", wifiManager.getSSID().c_str());
-        LOG_INFO("INIT", "AP IP: %s", wifiManager.getIP().c_str());
+        LOG_INFO("INIT", "SSID: %s", wifiManager.getSSID());
+        LOG_INFO("INIT", "AP IP: %s", wifiManager.getIP());
         LOG_INFO("INIT", "Connect to configure WiFi credentials");
     } else {
         LOG_INFO("INIT", "WiFi Connected!");
-        LOG_INFO("INIT", "IP Address: %s", wifiManager.getIP().c_str());
+        LOG_INFO("INIT", "IP Address: %s", wifiManager.getIP());
         LOG_INFO("INIT", "Signal: %d dBm", wifiManager.getRSSI());
     }
 
-    // Print status summary
+    // Component status summary (uses registry)
     LOG_INFO("INIT", "");
     LOG_INFO("INIT", "===========================================");
     LOG_INFO("INIT", "COMPONENT STATUS:");
     LOG_INFO("INIT", "-------------------------------------------");
-    LOG_INFO("INIT", "Storage:     %s", systemStatus.getStatus("Storage") == ComponentStatus::OK ? "[OK]" : "[FAIL]");
-    LOG_INFO("INIT", "HX711:       %s", systemStatus.getStatus("HX711") == ComponentStatus::OK ? "[OK]" :
-        systemStatus.getStatus("HX711") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
-    LOG_INFO("INIT", "MPU6050:     %s", systemStatus.getStatus("MPU6050") == ComponentStatus::OK ? "[OK]" :
-        systemStatus.getStatus("MPU6050") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
-    LOG_INFO("INIT", "Display:     %s", systemStatus.getStatus("Display") == ComponentStatus::OK ? "[OK]" :
-        systemStatus.getStatus("Display") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
+    LOG_INFO("INIT", "Storage:     %s", ss_getStatus(ss, "Storage") == ComponentStatus::OK ? "[OK]" : "[FAIL]");
+    LOG_INFO("INIT", "HX711:       %s", ss_getStatus(ss, "HX711") == ComponentStatus::OK ? "[OK]" :
+        ss_getStatus(ss, "HX711") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
+    LOG_INFO("INIT", "MPU6050:     %s", ss_getStatus(ss, "MPU6050") == ComponentStatus::OK ? "[OK]" :
+        ss_getStatus(ss, "MPU6050") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
+    LOG_INFO("INIT", "Display:     %s", ss_getStatus(ss, "Display") == ComponentStatus::OK ? "[OK]" :
+        ss_getStatus(ss, "Display") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
     LOG_INFO("INIT", "WiFi:        %s", wifiManager.isConnected() ? "[OK]" :
         wifiManager.isAPMode() ? "[AP]" : "[FAIL]");
-    LOG_INFO("INIT", "WebServer:   %s", systemStatus.getStatus("WebServer") == ComponentStatus::OK ? "[OK]" : "[FAIL]");
-    LOG_INFO("INIT", "Fingerprint: %s", systemStatus.getStatus("Fingerprint") == ComponentStatus::OK ? "[OK]" :
-        systemStatus.getStatus("Fingerprint") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
-    LOG_INFO("INIT", "Door:        %s", systemStatus.getStatus("Door") == ComponentStatus::OK ? "[OK]" : "[---]");
-    LOG_INFO("INIT", "Server:      %s", systemStatus.getStatus("ServerClient") == ComponentStatus::OK ? "[OK]" :
-        systemStatus.getStatus("ServerClient") == ComponentStatus::WARNING ? "[WARN]" : "[---]");
-    LOG_INFO("INIT", "AccessCtrl:  %s", systemStatus.getStatus("AccessController") == ComponentStatus::OK ? "[OK]" : "[FAIL]");
+    LOG_INFO("INIT", "WebServer:   %s", ss_getStatus(ss, "WebServer") == ComponentStatus::OK ? "[OK]" : "[FAIL]");
+    LOG_INFO("INIT", "Fingerprint: %s", ss_getStatus(ss, "Fingerprint") == ComponentStatus::OK ? "[OK]" :
+        ss_getStatus(ss, "Fingerprint") == ComponentStatus::ERROR ? "[FAIL]" : "[---]");
+    LOG_INFO("INIT", "Door:        %s", ss_getStatus(ss, "Door") == ComponentStatus::OK ? "[OK]" : "[---]");
+    LOG_INFO("INIT", "Server:      %s", ss_getStatus(ss, "ServerClient") == ComponentStatus::OK ? "[OK]" :
+        ss_getStatus(ss, "ServerClient") == ComponentStatus::WARNING ? "[WARN]" : "[---]");
+    LOG_INFO("INIT", "AccessCtrl:  %s", ss_getStatus(ss, "AccessController") == ComponentStatus::OK ? "[OK]" : "[FAIL]");
     LOG_INFO("INIT", "===========================================");
 
-    if (systemStatus.hasErrors()) {
+    if (ss_hasErrors(ss)) {
         LOG_INFO("INIT", "WARNING: Some components failed to initialize!");
-        LOG_INFO("INIT", "Last error: %s", systemStatus.getLastError().c_str());
+        LOG_INFO("INIT", "Last error: %s", ss_getLastError(ss));
         LOG_INFO("INIT", "System will continue with reduced functionality");
         LOG_INFO("INIT", "===========================================");
     }
+
+    // Wait for Core 0 fingerprint init to complete
+    xEventGroupWaitBits(bootSync, BOOT_FP_DONE, pdTRUE, pdTRUE, portMAX_DELAY);
+    vEventGroupDelete(bootSync);
+    LOG_INFO("INIT", "Phase 2 complete (network + fingerprint)");
+
+    ss_setBootStage(ss, BootStage::BS_ACCESS_SERVER);
 
     // ---- CREATE TASKS ----
     LOG_INFO("INIT", "Creating tasks...");
 
     int tasksOk = 0, tasksFail = 0;
-    #define CREATE_TASK(fn, name, stack, prio, handle, core) do { \
+    // Static stack allocator (WiFi stays heap — needs large TCP/IP stack)
+    static size_t stackOff = 0;
+    static int tcbIdx = 0;
+    #define CREATE_TASK_STATIC(fn, name, stackWords, prio, handle, core) do { \
+        StackType_t* stk = (StackType_t*)&g_registry.taskStackPool[stackOff]; \
+        StaticTask_t* tcb = &g_registry.taskTCBs[tcbIdx++]; \
+        stackOff += (stackWords) * sizeof(StackType_t); \
+        TaskHandle_t th = xTaskCreateStaticPinnedToCore(fn, name, stackWords, NULL, prio, stk, tcb, core); \
+        if (th == NULL) { \
+            LOG_ERROR("INIT", "FAILED to create %s task", name); \
+            tasksFail++; \
+        } else { \
+            tasksOk++; \
+            *(handle) = th; \
+        } \
+    } while(0)
+    #define CREATE_TASK_HEAP(fn, name, stack, prio, handle, core) do { \
         if (xTaskCreatePinnedToCore(fn, name, stack, NULL, prio, handle, core) != pdPASS) { \
             LOG_ERROR("INIT", "FAILED to create %s task", name); \
             tasksFail++; \
         } else { tasksOk++; } \
     } while(0)
 
-    CREATE_TASK(stateTask, "State", 2560, PRIORITY_STATE, &stateTaskHandle, 0);
-    CREATE_TASK(wifiTask, "WiFi", 6144, PRIORITY_WIFI, &wifiTaskHandle, 0);
+    // WiFi stays heap (needs large stack for lwIP)
+    CREATE_TASK_HEAP(wifiTask, "WiFi", 6144, PRIORITY_WIFI, &wifiTaskHandle, 0);
+    // Domain tasks use static stacks
+    CREATE_TASK_STATIC(stateTask, "State", 1536, PRIORITY_STATE, &stateTaskHandle, 0);
 
-    if (systemStatus.getStatus("Fingerprint") != ComponentStatus::ERROR) {
-        CREATE_TASK(accessTask, "Access", 4096, PRIORITY_ACCESS, &accessTaskHandle, 0);
+    if (ss_getStatus(ss, "Fingerprint") != ComponentStatus::ERROR) {
+        CREATE_TASK_STATIC(accessTask, "Access", 2560, PRIORITY_ACCESS, &accessTaskHandle, 0);
     }
-    if (systemStatus.getStatus("HX711") != ComponentStatus::ERROR) {
-        CREATE_TASK(weightTask, "Weight", 2560, PRIORITY_WEIGHT, &weightTaskHandle, 0);
+    if (ss_getStatus(ss, "HX711") != ComponentStatus::ERROR) {
+        CREATE_TASK_STATIC(weightTask, "Weight", 1536, PRIORITY_WEIGHT, &weightTaskHandle, 0);
     }
-    if (systemStatus.getStatus("MPU6050") != ComponentStatus::ERROR) {
-        CREATE_TASK(motionTask, "Motion", 2560, PRIORITY_MOTION, &motionTaskHandle, 0);
+    if (ss_getStatus(ss, "MPU6050") != ComponentStatus::ERROR) {
+        CREATE_TASK_STATIC(motionTask, "Motion", 1536, PRIORITY_MOTION, &motionTaskHandle, 0);
     }
-    if (systemStatus.getStatus("WebServer") == ComponentStatus::OK) {
-        CREATE_TASK(webTask, "Web", 4096, PRIORITY_WEB, &webTaskHandle, 0);
+    if (ss_getStatus(ss, "WebServer") == ComponentStatus::OK) {
+        CREATE_TASK_STATIC(webTask, "Web", 2560, PRIORITY_WEB, &webTaskHandle, 0);
     }
-    if (systemStatus.getStatus("Display") != ComponentStatus::ERROR) {
-        CREATE_TASK(displayTask, "Display", 2560, PRIORITY_DISPLAY, &displayTaskHandle, 1);
+    if (ss_getStatus(ss, "Display") != ComponentStatus::ERROR) {
+        CREATE_TASK_STATIC(displayTask, "Display", 1536, PRIORITY_DISPLAY, &displayTaskHandle, 1);
     }
 
     LOG_INFO("INIT", "Tasks created: %d OK, %d failed", tasksOk, tasksFail);
 
-    systemStatus.setBootComplete();
+    ss_setBootComplete(ss);
     LOG_INFO("INIT", "Free heap: %d bytes", ESP.getFreeHeap());
     LOG_INFO("INIT", "===========================================");
-    LOG_INFO("INIT", "System ready!");
+    LOG_INFO("INIT", "System ready! Registry at 0x%08X", (unsigned int)(uintptr_t)&g_registry);
     LOG_INFO("INIT", "===========================================");
     LOG_INFO("INIT", "setup() complete");
 }
@@ -595,25 +691,43 @@ void loop() {
         cli.handle();
     }
 #endif
-    powerManager.update();
-    systemStatus.update();
+    // Drain PowerManager mailbox
+    {
+        ServiceMessage pmMsg;
+        while (g_registry.tryReceive(ServiceId::POWER, pmMsg)) {
+            switch (static_cast<KernelMsgType>(pmMsg.type)) {
+                case KernelMsgType::ACTIVITY:
+                    powerManager.onActivity();
+                    break;
+                case KernelMsgType::MOTION_WAKE:
+                    powerManager.handleWakeFromMotion();
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
 
-    // Heartbeat — proves loop() is running
+    powerManager.update();
+
+    // Heartbeat
     static unsigned long lastHeartbeat = 0;
     if (millis() - lastHeartbeat > 5000) {
-        LOG_INFO("SYS", "heartbeat heap=%d state=%d mode=%s",
-                 ESP.getFreeHeap(), (int)powerManager.getCurrentState(),
-                 (SystemStatus::getInstance().getOperationalMode() == OperationalMode::OP_AP_FULL) ? "AP" : "STA");
+        auto* ss = g_registry.getSystemStatus();
+        LOG_INFO("SYS", "heartbeat heap=%d state=0 mode=%s reg=0x%08X",
+                 ESP.getFreeHeap(),
+                 (ss_getOperationalMode(ss) == OperationalMode::OP_AP_FULL) ? "AP" : "STA",
+                 (unsigned int)(uintptr_t)&g_registry);
         lastHeartbeat = millis();
     }
 
-    // Status LED (GPIO2, active LOW = ON)
+    // Status LED
     static unsigned long lastBlink = 0;
     bool connected = wifiManager.isConnected();
-    bool hasErrors = systemStatus.hasErrors();
+    bool hasErrors = ss_hasErrors(g_registry.getSystemStatus());
 
     if (apMode) {
-        digitalWrite(PIN_LED, LOW); // solid ON = AP mode (highest priority)
+        digitalWrite(PIN_LED, LOW);
     } else if (hasErrors) {
         if (millis() - lastBlink > 200) {
             digitalWrite(PIN_LED, !digitalRead(PIN_LED));
@@ -632,15 +746,5 @@ void loop() {
         }
     }
 
-    if (powerManager.getCurrentState() == PM_LIGHT_SLEEP) {
-        unsigned long idle = millis() - powerManager.getWakeCount() * 60000;
-        if (idle > 60000) {
-            powerManager.enterDeepSleep();
-        }
-    }
-
     delay(10);
 }
-
-// FreeRTOS hooks: framework provides esp_vApplicationIdleHook / esp_vApplicationTickHook.
-// Define here only if custom behavior needed (must use esp_ prefixed names).

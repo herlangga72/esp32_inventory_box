@@ -1,86 +1,67 @@
 #include "MatchingService.h"
-#include "../../data/ToolRepository.h"
-#include <algorithm>
-#include <cmath>
 
-MatchingService::MatchingService() : tools(nullptr) {}
+// ======================================================================
+// ms_matchByWeight
+// ======================================================================
+// Iterates the tools array manually (no STL). For each active tool whose
+// weightGrams lies within delta +/- toleranceGrams, writes the tool id to
+// outIds. Returns the total number of matched tools (capped at maxResults).
+// ======================================================================
+int ms_matchByWeight(const Tool* tools, int toolCount, float delta, float tolerance,
+                     int* outIds, int maxResults) {
+    int matchCount = 0;
 
-void MatchingService::setToolRepository(ToolRepository* repo) {
-    tools = repo;
-}
+    for (int i = 0; i < toolCount && matchCount < maxResults; i++) {
+        if (!tools[i].active) continue;
 
-Tool* MatchingService::matchByWeight(float delta, float tolerance) {
-    if (!tools) return nullptr;
-    
-    auto allTools = tools->findActive();
-    Tool* bestMatch = nullptr;
-    float bestDiff = 999999.0f;
-    
-    for (auto& tool : allTools) {
-        float diff = abs(delta - tool.weightGrams);
-        if (diff <= tolerance && diff < bestDiff) {
-            bestMatch = const_cast<Tool*>(&tool);
-            bestDiff = diff;
+        float diff = abs(delta - tools[i].weightGrams);
+        if (diff <= tools[i].toleranceGrams) {
+            outIds[matchCount++] = tools[i].id;
         }
     }
-    
-    return bestMatch;
+
+    return matchCount;
 }
 
-Tool* MatchingService::matchByWeightClosest(float delta, float tolerance) {
-    if (!tools) return nullptr;
-    
-    auto allTools = tools->findActive();
-    Tool* closest = nullptr;
-    float minDiff = 999999.0f;
-    
-    for (auto& tool : allTools) {
-        float diff = abs(delta - tool.weightGrams);
-        if (diff < minDiff) {
-            minDiff = diff;
-            closest = const_cast<Tool*>(&tool);
+// ======================================================================
+// ms_matchClosest
+// ======================================================================
+// Finds the single active tool whose weightGrams is nearest to delta.
+// Writes the tool id to *outId and a confidence score (0..1) to
+// *outConfidence. Returns the matched tool id or -1 if no active tool found.
+// ======================================================================
+int ms_matchClosest(const Tool* tools, int toolCount, float delta,
+                    int* outId, float* outConfidence) {
+    int   bestId        = -1;
+    float bestDiff      = 3.4028235e+38f;  // FLT_MAX without <cfloat>
+    float bestTolerance = 0.0f;
+
+    for (int i = 0; i < toolCount; i++) {
+        if (!tools[i].active) continue;
+
+        float diff = abs(delta - tools[i].weightGrams);
+        if (diff < bestDiff) {
+            bestDiff      = diff;
+            bestId        = tools[i].id;
+            bestTolerance = tools[i].toleranceGrams;
         }
     }
-    
-    // Return only if within extended tolerance
-    if (minDiff <= tolerance) {
-        return closest;
-    }
-    return nullptr;
-}
 
-std::vector<Tool*> MatchingService::matchMultiple(float delta, int maxTools) {
-    std::vector<Tool*> matches;
-    if (!tools) return matches;
-    
-    float remainingDelta = delta;
-    auto allTools = tools->findActive();
-    
-    // Sort by weight (largest first)
-    std::sort(allTools.begin(), allTools.end(), 
-        [](const Tool& a, const Tool& b) {
-            return a.weightGrams > b.weightGrams;
-        });
-    
-    for (auto& tool : allTools) {
-        if (matches.size() >= (size_t)maxTools) break;
-        
-        if (remainingDelta >= tool.weightGrams - tool.toleranceGrams) {
-            if (abs(remainingDelta - tool.weightGrams) <= tool.toleranceGrams) {
-                matches.push_back(const_cast<Tool*>(&tool));
-                remainingDelta -= tool.weightGrams;
-            }
+    if (outId && bestId >= 0) {
+        *outId = bestId;
+    }
+
+    if (outConfidence) {
+        if (bestId < 0 || bestTolerance <= 0.001f) {
+            *outConfidence = 0.0f;
+        } else {
+            float conf = 1.0f - (bestDiff / bestTolerance);
+            // Clamp to [0, 1]
+            if (conf < 0.0f) conf = 0.0f;
+            if (conf > 1.0f) conf = 1.0f;
+            *outConfidence = conf;
         }
     }
-    
-    return matches;
-}
 
-float MatchingService::getMatchConfidence(Tool* tool, float delta) {
-    if (!tool) return 0.0f;
-    
-    float diff = abs(delta - tool->weightGrams);
-    if (tool->toleranceGrams <= 0.001f) return -1.0f;
-    float confidence = 1.0f - (diff / tool->toleranceGrams);
-    return std::max(0.0f, std::min(1.0f, confidence));
+    return bestId;
 }

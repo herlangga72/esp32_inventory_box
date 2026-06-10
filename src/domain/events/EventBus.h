@@ -2,38 +2,52 @@
 #define EVENT_BUS_H
 
 #include <Arduino.h>
-#include <functional>
-#include <map>
-#include <vector>
 #include "Events.h"
 
-using EventHandler = std::function<void(const EventPayload&)>;
+// Fixed-size subscriber: raw function pointer + context (no heap, no std::function)
+struct EventSubscriber {
+    void (*fn)(const EventPayload&, void*);
+    void* ctx;
+};
+
 using SubscriptionToken = int;
+static const int EVENT_BUS_MAX_EVENTS = 24;
+static const int EVENT_BUS_MAX_SUBS_PER_EVENT = 4;
+static const int EVENT_BUS_MAX_TOKENS = 16;
+
+// Subscriber tracking entry (for unsubscribe)
+struct SubEntry {
+    DomainEvent type;
+    uint8_t index;      // index within that event's subscriber array
+};
 
 class EventBus {
 public:
     static EventBus* getInstance();
 
-    SubscriptionToken subscribe(DomainEvent type, EventHandler handler);
+    SubscriptionToken subscribe(DomainEvent type,
+                                void (*fn)(const EventPayload&, void*),
+                                void* ctx = nullptr);
     void unsubscribe(SubscriptionToken token);
     void publish(const EventPayload& event);
     void publish(DomainEvent type);
-
     void clear();
 
 private:
-    struct SubEntry {
-        DomainEvent type;
-        int index;
-    };
+    static EventBus s_instance;          // static instance — no new()
 
-    static EventBus* instance;
+    // Fixed-size subscriber arrays — no std::map, no std::vector
+    EventSubscriber subscribers[EVENT_BUS_MAX_EVENTS][EVENT_BUS_MAX_SUBS_PER_EVENT];
+    uint8_t subscriberCounts[EVENT_BUS_MAX_EVENTS];  // count per event type
 
-    std::map<DomainEvent, std::vector<EventHandler>> subscribers;
-    std::map<SubscriptionToken, SubEntry> tokenMap;
-    int nextToken = 1;
+    // Fixed-size token registry
+    SubEntry tokenEntries[EVENT_BUS_MAX_TOKENS];
+    SubscriptionToken tokenSlots[EVENT_BUS_MAX_TOKENS]; // token -> index
+    uint8_t tokenCount;
 
-    EventBus() = default;
+    int nextToken;
+
+    EventBus();
     EventBus(const EventBus&) = delete;
     EventBus& operator=(const EventBus&) = delete;
 };

@@ -1,136 +1,119 @@
 #include "WeightService.h"
 #include "../events/EventBus.h"
-#include "config/Config.h"
+#include "../../config/Config.h"
 
-WeightService::WeightService(HX711Driver* driver)
-    : hx711(driver), filterIndex(0), filterSum(0),
-      baseline(0), currentWeight(0), previousWeight(0),
-      calibrationFactor(Config::CALIBRATION_FACTOR),
-      calibrating(false), calibrationSamples(0), totalCalSamples(0), calibrationSum(0) {
-    memset(readings, 0, sizeof(readings));
+// ---------------------------------------------------------------------------
+// Static helpers
+// ---------------------------------------------------------------------------
+
+static float applyMovingAverage(WeightServiceMemory* mem, int32_t raw) {
+    // Subtract the oldest reading from the running sum
+    mem->filterSum -= mem->readings[mem->filterIndex];
+
+    // Add the new reading (scaled by calibration factor)
+    mem->readings[mem->filterIndex] = raw * mem->calibrationFactor;
+    mem->filterSum += mem->readings[mem->filterIndex];
+
+    // Advance the circular index
+    mem->filterIndex = (mem->filterIndex + 1) % Config::FILTER_SIZE;
+
+    return mem->filterSum / Config::FILTER_SIZE;
 }
 
-void WeightService::begin() {
-    hx711->begin();
-}
+static void processWeight(WeightServiceMemory* mem) {
+    float delta = mem->currentWeight - mem->baseline;
 
-void WeightService::update() {
-    if (hx711->isReady()) {
-        int32_t raw = hx711->readRaw();
-        onRawReading(raw);
-    }
-}
+    // Send WEIGHT_CHANGE to StateManager (delta in f2.f1, currentWeight in f2.f2)
+    ServiceMessage sm = ServiceMessage::cmd(
+        ServiceId::STATE_MANAGER,
+        static_cast<uint8_t>(StateMsgType::WEIGHT_CHANGE));
+    sm.f2.f1 = delta;
+    sm.f2.f2 = mem->currentWeight;
+    g_registry.send(ServiceId::STATE_MANAGER, sm);
 
-float WeightService::applyMovingAverage(int32_t raw) {
-    // Subtract old value from sum
-    filterSum -= readings[filterIndex];
-    
-    // Add new reading
-    readings[filterIndex] = raw * calibrationFactor;
-    filterSum += readings[filterIndex];
-    
-    // Advance index
-    filterIndex = (filterIndex + 1) % Config::FILTER_SIZE;
-    
-    // Return average
-    return filterSum / Config::FILTER_SIZE;
-}
+    // Send WEIGHT_UPDATE to DisplayManager (currentWeight in f2.f1, delta in f2.f2)
+    ServiceMessage dm = ServiceMessage::cmd(
+        ServiceId::DISPLAY_MANAGER,
+        static_cast<uint8_t>(DisplayMsgType::WEIGHT_UPDATE));
+    dm.f2.f1 = mem->currentWeight;
+    dm.f2.f2 = delta;
+    g_registry.send(ServiceId::DISPLAY_MANAGER, dm);
 
-void WeightService::onRawReading(int32_t raw) {
-    previousWeight = currentWeight;
-    currentWeight = applyMovingAverage(raw);
-
-    // Calibration mode: accumulate samples until the requested count is reached
-    if (calibrating && calibrationSamples > 0) {
-        calibrationSum += currentWeight;
-        calibrationSamples--;
-        if (calibrationSamples == 0) {
-            baseline = calibrationSum / totalCalSamples;
-            calibrating = false;
-
-            // Publish calibration complete event
-            EventPayload event;
-            event.type = DomainEvent::CALIBRATION_COMPLETE;
-            event.timestamp = millis();
-            event.data.generic.value = baseline;
-            EventBus::getInstance()->publish(event);
-        }
-        return;  // don't publish WEIGHT_UPDATED during calibration
-    }
-
-    processWeight();
-}
-
-void WeightService::processWeight() {
-    float delta = currentWeight - baseline;
-    
+    // Publish WEIGHT_UPDATED to EventBus for backward compatibility
     EventPayload event;
     event.type = DomainEvent::WEIGHT_UPDATED;
     event.timestamp = millis();
-    event.data.weight.weight = currentWeight;
-    event.data.weight.delta = delta;
-    event.data.weight.baseline = baseline;
-    
+    event.data.weight.weight   = mem->currentWeight;
+    event.data.weight.delta    = delta;
+    event.data.weight.baseline = mem->baseline;
     EventBus::getInstance()->publish(event);
-    
-    // Check for significant change
-    if (abs(delta) > Config::WEIGHT_THRESHOLD_GRAMS) {
-        EventPayload changeEvent;
-        changeEvent.type = DomainEvent::WEIGHT_CHANGE_SIGNIFICANT;
-        changeEvent.timestamp = millis();
-        changeEvent.data.weight.weight = currentWeight;
-        changeEvent.data.weight.delta = delta;
-        EventBus::getInstance()->publish(changeEvent);
+}
+
+// ---------------------------------------------------------------------------
+// Public free-function API
+// ---------------------------------------------------------------------------
+
+void ws_onRawReading(WeightServiceMemory* mem, int32_t raw) {
+    mem->previousWeight = mem->currentWeight;
+    mem->currentWeight  = applyMovingAverage(mem, raw);
+    mem->readingsTaken++;
+
+    // Calibration mode: accumulate samples until the requested count is reached
+    if (mem->calibrating && mem->calibrationSamples > 0) {
+        mem->calibrationSum += mem->currentWeight;
+        mem->calibrationSamples--;
+
+        if (mem->calibrationSamples == 0) {
+            mem->baseline    = mem->calibrationSum / mem->totalCalSamples;
+            mem->calibrating = 0;
+
+            // Publish CALIBRATION_COMPLETE event
+            EventPayload event;
+            event.type = DomainEvent::CALIBRATION_COMPLETE;
+            event.timestamp = millis();
+            event.data.generic.value = mem->baseline;
+            EventBus::getInstance()->publish(event);
+        }
+        return;  // Don't publish WEIGHT_UPDATED during calibration
+    }
+
+    processWeight(mem);
+}
+
+void ws_update(WeightServiceMemory* mem) {
+    ServiceMessage msg;
+    while (g_registry.tryReceive(ServiceId::WEIGHT_SERVICE, msg)) {
+        switch (static_cast<WeightMsgType>(msg.type)) {
+            case WeightMsgType::SET_BASELINE:
+                mem->baseline = msg.f2.f1;
+                break;
+
+            case WeightMsgType::START_CALIBRATION:
+                mem->calibrating       = 1;
+                mem->calibrationSamples = msg.u4.u1;
+                mem->totalCalSamples   = msg.u4.u1;
+                mem->calibrationSum    = 0;
+                break;
+
+            case WeightMsgType::TARE:
+                mem->baseline = 0;
+                break;
+
+            default:
+                break;
+        }
+        mem->messagesProcessed++;
     }
 }
 
-float WeightService::getCurrentWeight() {
-    return currentWeight;
+float ws_getCurrentWeight(const WeightServiceMemory* mem) {
+    return mem->currentWeight;
 }
 
-float WeightService::getBaseline() {
-    return baseline;
+float ws_getBaseline(const WeightServiceMemory* mem) {
+    return mem->baseline;
 }
 
-float WeightService::getDelta() {
-    return currentWeight - baseline;
-}
-
-void WeightService::setBaseline(float newBaseline) {
-    baseline = newBaseline;
-}
-
-void WeightService::startCalibration(int samples) {
-    calibrating = true;
-    calibrationSamples = samples;
-    totalCalSamples = samples;
-    calibrationSum = 0;
-}
-
-bool WeightService::isCalibrating() {
-    return calibrating;
-}
-
-bool WeightService::isCalibrationComplete() {
-    return !calibrating && totalCalSamples > 0 && calibrationSamples == 0;
-}
-
-float WeightService::getCalibrationResult() {
-    if (calibrationSum == 0) return baseline;
-    int collected = totalCalSamples - calibrationSamples;
-    if (collected <= 0) return baseline;
-    return calibrationSum / collected;
-}
-
-void WeightService::tare() {
-    hx711->tare(10);
-    baseline = 0;
-}
-
-void WeightService::setCalibrationFactor(float factor) {
-    calibrationFactor = factor;
-}
-
-float WeightService::getCalibrationFactor() {
-    return calibrationFactor;
+float ws_getDelta(const WeightServiceMemory* mem) {
+    return mem->currentWeight - mem->baseline;
 }

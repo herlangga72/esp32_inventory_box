@@ -1,35 +1,105 @@
 #include "DoorService.h"
+#include "../events/EventBus.h"
 #include "../../config/Config.h"
 #include "../../utils/LogManager.h"
+#include <Arduino.h>
 
-DoorService::DoorService(EventBus* events)
-    : events(events), state(DoorState::LOCKED), stateStartMs(0),
-      relayActivateTime(0), lockDurationMs(RELAY_DURATION_MS),
-      lastReedState(false), lastReedChange(0) {}
+// ---- Constants ----
+static const int DOOR_HELD_OPEN_SECS = 30;
 
-void DoorService::begin() {
-    // Relay: active LOW = unlocked, HIGH = locked (safe-fail)
-    pinMode(PIN_RELAY, OUTPUT);
-    digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE == LOW ? HIGH : LOW);  // lock on boot
+// Internal state enum (matches DoorState)
+enum : uint8_t { DS_LOCKED, DS_UNLOCKING, DS_UNLOCKED, DS_HELD_OPEN };
 
-    // Reed switch: internal pullup, LOW = magnet near = door closed
-    pinMode(PIN_DOOR_SENSOR, INPUT_PULLUP);
-
-    lastReedState = readReedDebounced();
-    stateStartMs = millis();
-
-    LOG_INFO("DOOR", "INIT state=%s reed=%s relay=%s",
-             "LOCKED",
-             lastReedState ? "open" : "closed",
-             isRelayActive() ? "on" : "off");
+// ---- Helper ----
+static bool ds_readReedDebounced() {
+    int highs = 0;
+    for (int i = 0; i < 3; i++) {
+        if (digitalRead(PIN_DOOR_SENSOR) == 1) highs++;
+        delay(10);
+    }
+    return (highs >= 2);
 }
 
-void DoorService::update() {
-    // Debounce reed switch
-    bool currentReed = readReedDebounced();
+// ======================================================================
+// LIFECYCLE
+// ======================================================================
 
-    if (currentReed != lastReedState) {
-        lastReedState = currentReed;
+void ds_begin(DoorServiceMemory* mem) {
+    memset(mem, 0, sizeof(DoorServiceMemory));
+    mem->state          = DS_LOCKED;
+    mem->lockDurationMs = RELAY_DURATION_MS;
+
+    // Relay: active 0 = unlocked, 1 = locked (safe-fail)
+    pinMode(PIN_RELAY, OUTPUT);
+    digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE == 0 ? 1 : 0);
+
+    // Reed switch: internal pullup, 0 = magnet near = door closed
+    pinMode(PIN_DOOR_SENSOR, INPUT_PULLUP);
+
+    // Read initial reed state with debounce
+    mem->lastReedState = ds_readReedDebounced();
+    mem->stateStartMs  = millis();
+
+    LOG_INFO("DOOR", "INIT state=LOCKED reed=%s relay=%s",
+             mem->lastReedState ? "open" : "closed",
+             digitalRead(PIN_RELAY) == RELAY_ACTIVE_STATE ? "on" : "off");
+}
+
+// ======================================================================
+// MESSAGE DISPATCH
+// ======================================================================
+
+void ds_dispatchMessage(DoorServiceMemory* mem, const ServiceMessage& msg) {
+    switch (static_cast<DoorMsgType>(msg.type)) {
+        case DoorMsgType::UNLOCK:
+            // Optional duration override
+            if (msg.u32.u32_1 > 0) {
+                mem->lockDurationMs = msg.u32.u32_1;
+            }
+            // Energize relay
+            digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE);
+            mem->relayActivateTime = millis();
+            mem->state = DS_UNLOCKING;
+            mem->stateStartMs = millis();
+            LOG_INFO("DOOR", "UNLOCK duration=%dms", (int)mem->lockDurationMs);
+            break;
+
+        case DoorMsgType::LOCK:
+            // De-energize relay (safe-fail: opposite of active state)
+            digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE == 0 ? 1 : 0);
+            mem->relayActivateTime = 0;
+            mem->state = DS_LOCKED;
+            mem->stateStartMs = millis();
+            LOG_INFO("DOOR", "LOCK");
+            break;
+
+        case DoorMsgType::SET_DURATION:
+            mem->lockDurationMs = msg.u32.u32_1;
+            LOG_INFO("DOOR", "SET_DURATION %dms", (int)mem->lockDurationMs);
+            break;
+
+        default:
+            break;
+    }
+}
+
+// ======================================================================
+// MAIN UPDATE — periodic tick
+// ======================================================================
+
+void ds_update(DoorServiceMemory* mem) {
+    // Drain mailbox
+    ServiceMessage msg;
+    while (g_registry.tryReceive(ServiceId::DOOR_SERVICE, msg)) {
+        ds_dispatchMessage(mem, msg);
+    }
+
+    // Debounce reed switch
+    bool currentReed = ds_readReedDebounced();
+
+    if (currentReed != mem->lastReedState) {
+        mem->lastReedState  = currentReed;
+        mem->lastReedChange = millis();
 
         if (currentReed) {
             // Door opened
@@ -37,106 +107,63 @@ void DoorService::update() {
             EventPayload ev;
             ev.type = DomainEvent::DOOR_OPEN;
             ev.timestamp = time(nullptr);
-            events->publish(ev);
+            EventBus::getInstance()->publish(ev);
         } else {
             // Door closed
             LOG_INFO("DOOR", "CLOSE");
             EventPayload ev;
             ev.type = DomainEvent::DOOR_CLOSE;
             ev.timestamp = time(nullptr);
-            events->publish(ev);
+            EventBus::getInstance()->publish(ev);
         }
     }
 
-    // Relay auto-lock timer
-    if (state == DoorState::UNLOCKING && isRelayActive()) {
-        if (millis() - relayActivateTime >= lockDurationMs) {
-            lock();
-            setState(DoorState::LOCKED);
+    // Auto-lock timer — check while relay is energized
+    if ((mem->state == DS_UNLOCKING || mem->state == DS_UNLOCKED)
+        && digitalRead(PIN_RELAY) == RELAY_ACTIVE_STATE) {
+        if (millis() - mem->relayActivateTime >= mem->lockDurationMs) {
+            digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE == 0 ? 1 : 0);
+            mem->relayActivateTime = 0;
+            mem->state = DS_LOCKED;
+            mem->stateStartMs = millis();
+            LOG_INFO("DOOR", "AUTO_LOCK");
         }
     }
 
-    // Transition UNLOCKING -> UNLOCKED after relay fires
-    if (state == DoorState::UNLOCKING && relayActivateTime > 0) {
-        if (millis() - relayActivateTime > 100) {
-            setState(DoorState::UNLOCKED);
+    // Transition UNLOCKING -> UNLOCKED after relay fires (100ms debounce)
+    if (mem->state == DS_UNLOCKING && mem->relayActivateTime > 0) {
+        if (millis() - mem->relayActivateTime > 100) {
+            mem->state = DS_UNLOCKED;
+            mem->stateStartMs = millis();
         }
     }
 
-    // Door held open alarm
-    if (lastReedState && state != DoorState::HELD_OPEN) {
-        unsigned long openSecs = getSecondsOpen();
-        if (openSecs >= DOOR_HELD_OPEN_SECS) {
-            LOG_WARN("DOOR", "HELD_OPEN duration=%ds", openSecs);
-            setState(DoorState::HELD_OPEN);
+    // Door held-open alarm (> 30s)
+    if (mem->lastReedState && mem->state != DS_HELD_OPEN) {
+        unsigned long openSecs = (millis() - mem->lastReedChange) / 1000;
+        if (openSecs >= static_cast<unsigned long>(DOOR_HELD_OPEN_SECS)) {
+            LOG_WARN("DOOR", "HELD_OPEN duration=%ds", (int)openSecs);
+            mem->state = DS_HELD_OPEN;
+            mem->stateStartMs = millis();
+
             EventPayload ev;
             ev.type = DomainEvent::DOOR_HELD_OPEN;
             ev.timestamp = time(nullptr);
-            events->publish(ev);
+            EventBus::getInstance()->publish(ev);
         }
     }
 
-    // Reset held open when door closes
-    if (!lastReedState && state == DoorState::HELD_OPEN) {
-        setState(DoorState::LOCKED);
+    // Reset held-open when door closes
+    if (!mem->lastReedState && mem->state == DS_HELD_OPEN) {
+        mem->state = DS_LOCKED;
+        mem->stateStartMs = millis();
     }
 }
 
-void DoorService::unlock() {
-    digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE);
-    relayActivateTime = millis();
-    setState(DoorState::UNLOCKING);
-    LOG_INFO("DOOR", "UNLOCK duration=%dms", lockDurationMs);
-}
+// ======================================================================
+// STATUS QUERY
+// ======================================================================
 
-void DoorService::lock() {
-    digitalWrite(PIN_RELAY, RELAY_ACTIVE_STATE == LOW ? HIGH : LOW);
-    relayActivateTime = 0;
-}
-
-bool DoorService::isDoorOpen() const {
-    return lastReedState;
-}
-
-bool DoorService::isRelayActive() const {
-    return digitalRead(PIN_RELAY) == RELAY_ACTIVE_STATE;
-}
-
-unsigned long DoorService::getSecondsOpen() const {
-    if (!lastReedState) return 0;
-    return (millis() - lastReedChange) / 1000;
-}
-
-unsigned long DoorService::getLockTimeRemaining() const {
-    if (state != DoorState::UNLOCKING || relayActivateTime == 0) return 0;
-    unsigned long elapsed = millis() - relayActivateTime;
-    if (elapsed >= lockDurationMs) return 0;
-    return lockDurationMs - elapsed;
-}
-
-DoorState DoorService::getState() const {
-    return state;
-}
-
-void DoorService::setLockDuration(unsigned long ms) {
-    lockDurationMs = ms;
-}
-
-unsigned long DoorService::getLockDuration() const {
-    return lockDurationMs;
-}
-
-void DoorService::setState(DoorState newState) {
-    state = newState;
-    stateStartMs = millis();
-}
-
-bool DoorService::readReedDebounced() {
-    // Simple majority-read debounce (3 reads, 10ms apart)
-    int highs = 0;
-    for (int i = 0; i < 3; i++) {
-        if (digitalRead(PIN_DOOR_SENSOR) == HIGH) highs++;
-        delay(10);
-    }
-    return highs >= 2;
+bool ds_isDoorOpen(const DoorServiceMemory* mem) {
+    return mem->lastReedState;
 }

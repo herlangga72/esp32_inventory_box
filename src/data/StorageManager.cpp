@@ -25,6 +25,10 @@ String StorageManager::getString(const char* key, const char* defaultValue) {
     return prefs.getString(key, defaultValue);
 }
 
+size_t StorageManager::getChars(const char* key, char* buf, size_t maxLen) {
+    return prefs.getString(key, buf, maxLen) ? strlen(buf) : 0;
+}
+
 void StorageManager::putString(const char* key, const char* value) {
     prefs.putString(key, value);
 }

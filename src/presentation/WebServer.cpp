@@ -11,11 +11,21 @@
 #include "../domain/entities/BoxState.h"
 #include "../kernel/WiFiManager.h"
 #include "../kernel/SystemStatus.h"
+#include "../data/StorageManager.h"
 #include "../utils/LogManager.h"
 #include "../utils/JsonBuilder.h"
 #include "../utils/JsonParser.h"
 
 extern StorageManager storage;
+
+// Registry shorthand
+#define RSTATUS    g_registry.getSystemStatus()
+#define RSTATE     g_registry.getStateManager()
+#define RSTATE     g_registry.getStateManager()
+#define RWEIGHT    g_registry.getWeightService()
+#define RACCESS    g_registry.getAccessController()
+#define RTOOLS     g_registry.getToolRepository()
+#define RUSERS     g_registry.getUserRepository()
 
 // ---- Request structs ----
 
@@ -28,7 +38,7 @@ WebServerManager::WebServerManager(EventBus* events)
     : events(events), stateManager(nullptr), toolRepo(nullptr),
       userRepo(nullptr), logRepo(nullptr), weightService(nullptr),
       wifiManager(nullptr), systemStatus(nullptr),
-      accessController(nullptr), serverClient(nullptr) {}
+      fpDriver(nullptr), serverClient(nullptr) {}
 
 void WebServerManager::begin() {
     server.on("/", HTTP_GET, [this]() { handleRoot(); });
@@ -118,9 +128,9 @@ void WebServerManager::handleStatus() {
     jb.addBool("apMode", wifiManager && wifiManager->isAPMode());
 
     if (wifiManager) {
-        jb.addStr("ipAddress", wifiManager->getIP().c_str());
+        jb.addStr("ipAddress", wifiManager->getIP());
         jb.addInt("wifiRssi", wifiManager->getRSSI());
-        jb.addStr("wifiSSID", wifiManager->getSSID().c_str());
+        jb.addStr("wifiSSID", wifiManager->getSSID());
     } else {
         jb.addStr("ipAddress", "--");
         jb.addInt("wifiRssi", 0);
@@ -129,33 +139,33 @@ void WebServerManager::handleStatus() {
 
     if (systemStatus) {
         const char* statusStr = "UNKNOWN";
-        ComponentStatus overall = systemStatus->getOverallStatus();
+        ComponentStatus overall = ss_getOverallStatus(RSTATUS);
         if (overall == ComponentStatus::OK) statusStr = "OK";
         else if (overall == ComponentStatus::WARNING) statusStr = "WARNING";
         else if (overall == ComponentStatus::ERROR) statusStr = "ERROR";
         jb.addStr("systemStatus", statusStr);
-        jb.addBool("hasErrors", systemStatus->hasErrors());
+        jb.addBool("hasErrors", ss_hasErrors(RSTATUS));
     } else {
         jb.addStr("systemStatus", "UNKNOWN");
         jb.addBool("hasErrors", false);
     }
 
-    if (stateManager) {
-        jb.addStr("state", stateToString((int)stateManager->getCurrentState()).c_str());
-        jb.addInt("contents", stateManager->getState()->contentCount);
-        jb.addInt("currentUser", stateManager->getCurrentUserId());
+    {
+        jb.addStr("state", stateToString((int)sm_getCurrentState(RSTATE)).c_str());
+        jb.addInt("contents", sm_getContentCount(RSTATE));
+        jb.addInt("currentUser", sm_getCurrentUserId(RSTATE));
 
-        if (stateManager->getCurrentUserId() > 0 && userRepo) {
-            User* u = userRepo->findById(stateManager->getCurrentUserId());
+        if (sm_getCurrentUserId(RSTATE) > 0 && userRepo) {
+            User* u = ur_findById(RUSERS, &storage, sm_getCurrentUserId(RSTATE));
             jb.addStr("currentUserName", u ? u->name : "");
         } else {
             jb.addStr("currentUserName", "");
         }
 
         jb.startArr("contentsList");
-        BoxState* st = stateManager->getState();
-        for (int i = 0; i < st->contentCount; i++) {
-            Tool* t = toolRepo ? toolRepo->findById(st->contents[i]) : nullptr;
+        auto* st = RSTATE;
+        for (int i = 0; i < sm_getContentCount(RSTATE); i++) {
+            Tool* t = toolRepo ? tr_findById(RTOOLS, &storage, sm_getContents(RSTATE)[i]) : nullptr;
             if (t) {
                 jb.startArrObj();
                 jb.addInt("id", t->id);
@@ -168,9 +178,9 @@ void WebServerManager::handleStatus() {
     }
 
     if (weightService) {
-        jb.addFlt("weight", weightService->getCurrentWeight());
-        jb.addFlt("baseline", weightService->getBaseline());
-        jb.addFlt("delta", weightService->getDelta());
+        jb.addFlt("weight", ws_getCurrentWeight(RWEIGHT));
+        jb.addFlt("baseline", ws_getBaseline(RWEIGHT));
+        jb.addFlt("delta", ws_getDelta(RWEIGHT));
     }
 
     jb.addInt("uptime", (int)millis());
@@ -184,12 +194,14 @@ void WebServerManager::handleStatus() {
 
 void WebServerManager::handleTools() {
     if (server.method() == HTTP_GET) {
-        auto tools = toolRepo ? toolRepo->findAll() : std::vector<Tool>();
+        Tool tools[Config::MAX_TOOLS];
+        int toolCount = tr_findAll(RTOOLS, &storage, tools, Config::MAX_TOOLS);
 
         JsonBuilder jb;
         jb.startObj();
         jb.startArr("tools");
-        for (auto& tool : tools) {
+        for (int _i = 0; _i < toolCount; _i++) {
+            auto& tool = tools[_i];
             jb.startArrObj();
             jb.addInt("id", tool.id);
             jb.addStr("name", tool.name);
@@ -221,7 +233,7 @@ void WebServerManager::handleTools() {
         tool.toleranceGrams = req.tolerance;
 
         if (toolRepo) {
-            int id = toolRepo->create(&tool);
+            int id = tr_create(RTOOLS, &storage, &tool);
 
             JsonBuilder jb;
             jb.startObj();
@@ -240,7 +252,7 @@ void WebServerManager::handleToolById() {
     int id = path.substring(path.lastIndexOf('/') + 1).toInt();
 
     if (server.method() == HTTP_GET) {
-        Tool* tool = toolRepo ? toolRepo->findById(id) : nullptr;
+        Tool* tool = toolRepo ? tr_findById(RTOOLS, &storage, id) : nullptr;
         if (tool) {
             JsonBuilder jb;
             jb.startObj();
@@ -267,19 +279,19 @@ void WebServerManager::handleToolById() {
             sendError(400, "Invalid JSON"); return;
         }
 
-        Tool* tool = toolRepo ? toolRepo->findById(id) : nullptr;
+        Tool* tool = toolRepo ? tr_findById(RTOOLS, &storage, id) : nullptr;
         if (tool) {
             if (req.name[0]) tool->setName(req.name);
             tool->weightGrams = req.weight;
             tool->toleranceGrams = req.tolerance;
-            toolRepo->update(id, tool);
+            tr_update(RTOOLS, &storage, id, tool);
             sendJson("{\"success\":true}");
         } else {
             sendError(404, "Tool not found");
         }
 
     } else if (server.method() == HTTP_DELETE) {
-        if (toolRepo && toolRepo->remove(id)) {
+        if ( tr_remove(RTOOLS, &storage, id)) {
             sendJson("{\"success\":true}");
         } else {
             sendError(404, "Tool not found");
@@ -291,12 +303,14 @@ void WebServerManager::handleToolById() {
 
 void WebServerManager::handleUsers() {
     if (server.method() == HTTP_GET) {
-        auto users = userRepo ? userRepo->findAll() : std::vector<User>();
+        User users[Config::MAX_USERS];
+        int userCount = ur_findAll(RUSERS, &storage, users, Config::MAX_USERS);
 
         JsonBuilder jb;
         jb.startObj();
         jb.startArr("users");
-        for (auto& user : users) {
+        for (int _i = 0; _i < userCount; _i++) {
+            auto& user = users[_i];
             jb.startArrObj();
             jb.addInt("id", user.id);
             jb.addStr("name", user.name);
@@ -325,7 +339,7 @@ void WebServerManager::handleUsers() {
         if (req.pin[0]) user.setPin(req.pin);
 
         if (userRepo) {
-            int id = userRepo->create(&user);
+            int id = ur_create(RUSERS, &storage, &user);
 
             JsonBuilder jb;
             jb.startObj();
@@ -349,9 +363,11 @@ void WebServerManager::handleUserLogin() {
         sendError(400, "PIN required"); return;
     }
 
-    User* user = userRepo ? userRepo->authenticate(req.pin) : nullptr;
+    User* user = userRepo ? ur_authenticate(RUSERS, &storage, req.pin) : nullptr;
     if (user) {
-        if (stateManager) stateManager->onUserLogin(user->id);
+        ServiceMessage _sm = ServiceMessage::cmd(ServiceId::STATE_MANAGER, (uint8_t)StateMsgType::USER_LOGIN);
+        _sm.u4.u1 = (uint16_t)(user->id);
+        g_registry.send(ServiceId::STATE_MANAGER, _sm);
 
         JsonBuilder jb;
         jb.startObj();
@@ -366,13 +382,13 @@ void WebServerManager::handleUserLogin() {
 }
 
 void WebServerManager::handleUserLogout() {
-    if (stateManager) stateManager->onUserLogout();
+    g_registry.sendCmd(ServiceId::STATE_MANAGER, (uint8_t)StateMsgType::USER_LOGOUT);
     sendJson("{\"success\":true}");
 }
 
 void WebServerManager::handleUserDelete() {
     int id = server.uri().substring(server.uri().lastIndexOf('/') + 1).toInt();
-    if (userRepo && userRepo->remove(id)) {
+    if ( ur_remove(RUSERS, &storage, id)) {
         sendJson("{\"success\":true}");
     } else {
         sendError(404, "User not found");
@@ -385,12 +401,14 @@ void WebServerManager::handleLogs() {
     int limit = server.hasArg("limit") ? server.arg("limit").toInt() : 50;
     int offset = server.hasArg("offset") ? server.arg("offset").toInt() : 0;
 
-    auto logs = logRepo ? logRepo->findFiltered(limit, offset, 0) : std::vector<LogEntry>();
+    LogEntry logBuf[50];
+    int logCount = logRepo ? logRepo->findFiltered(logBuf, 50, limit, offset, 0) : 0;
 
     JsonBuilder jb;
     jb.startObj();
     jb.startArr("logs");
-    for (auto& entry : logs) {
+    for (int li = 0; li < logCount; li++) {
+        auto& entry = logBuf[li];
         jb.startArrObj();
         jb.addInt("ts", (int)entry.timestamp);
         jb.addInt("level", entry.severity);
@@ -412,8 +430,9 @@ void WebServerManager::handleLogs() {
 
 void WebServerManager::handleLogsDownload() {
     if (!logRepo) { sendError(500, "Log repository not available"); return; }
-    String csv = logRepo->downloadCSV();
-    server.send(200, "text/csv", csv);
+    char csvBuf[4096];
+    int csvLen = logRepo->downloadCSV(csvBuf, sizeof(csvBuf));
+    server.send(200, "text/csv", String(csvBuf));
 }
 
 void WebServerManager::handleLogsClear() {
@@ -428,9 +447,11 @@ void WebServerManager::handleLogsClear() {
 // ---- Calibrate ----
 
 void WebServerManager::handleCalibrate() {
-    if (weightService && stateManager) {
-        float baseline = weightService->getBaseline();
-        stateManager->setBaseline(baseline);
+    {
+        float baseline = ws_getBaseline(RWEIGHT);
+        ServiceMessage _sm = ServiceMessage::cmd(ServiceId::STATE_MANAGER, (uint8_t)StateMsgType::CALIBRATION);
+        _sm.f2.f1 = baseline;
+        g_registry.send(ServiceId::STATE_MANAGER, _sm);
         storage.putFloat("baseline", baseline);
 
         JsonBuilder jb;
@@ -439,8 +460,6 @@ void WebServerManager::handleCalibrate() {
         jb.addFlt("baseline", baseline);
         jb.endObj();
         sendJson(jb.str());
-    } else {
-        sendError(500, "Not ready");
     }
 }
 
@@ -505,25 +524,25 @@ void WebServerManager::handleDiagnostics() {
     jb.startObj();
 
     if (systemStatus) {
-        ComponentStatus overall = systemStatus->getOverallStatus();
+        ComponentStatus overall = ss_getOverallStatus(RSTATUS);
         const char* statusStr = "UNKNOWN";
         if (overall == ComponentStatus::OK) statusStr = "OK";
         else if (overall == ComponentStatus::WARNING) statusStr = "WARNING";
         else if (overall == ComponentStatus::ERROR) statusStr = "ERROR";
 
         jb.addStr("overallStatus", statusStr);
-        jb.addInt("uptime", (int)systemStatus->getUptime());
-        jb.addInt("totalErrors", systemStatus->getErrorCount());
-        jb.addStr("lastError", systemStatus->getLastError().c_str());
-        jb.addInt("okCount", systemStatus->getOKCount());
-        jb.addInt("warningCount", systemStatus->getWarningCount());
-        jb.addInt("errorCount", systemStatus->getErrorComponentCount());
+        jb.addInt("uptime", (int)ss_getUptime(RSTATUS));
+        jb.addInt("totalErrors", ss_getErrorCount(RSTATUS));
+        jb.addStr("lastError", ss_getLastError(RSTATUS));
+        jb.addInt("okCount", ss_getOKCount(RSTATUS));
+        jb.addInt("warningCount", ss_getWarningCount(RSTATUS));
+        jb.addInt("errorCount", ss_getErrorComponentCount(RSTATUS));
 
         jb.startArr("components");
-        auto allComps = systemStatus->getAllComponents();
-        for (auto& comp : allComps) {
+        for (int ci = 0; ci < RSTATUS->componentCount; ci++) {
+            auto& comp = RSTATUS->components[ci];
             jb.startArrObj();
-            jb.addStr("name", comp.name.c_str());
+            jb.addStr("name", comp.name);
 
             const char* s = "UNKNOWN";
             if (comp.status == ComponentStatus::OK) s = "OK";
@@ -531,7 +550,7 @@ void WebServerManager::handleDiagnostics() {
             else if (comp.status == ComponentStatus::ERROR) s = "ERROR";
             jb.addStr("status", s);
 
-            jb.addStr("lastError", comp.lastError.c_str());
+            jb.addStr("lastError", comp.lastError);
             jb.addInt("errorCount", comp.errorCount);
             jb.endObj();
         }
@@ -567,8 +586,8 @@ void WebServerManager::handleWiFiStatus() {
     jb.addBool("apMode", wifiManager && wifiManager->isAPMode());
 
     if (wifiManager) {
-        jb.addStr("ip", wifiManager->getIP().c_str());
-        jb.addStr("ssid", wifiManager->getSSID().c_str());
+        jb.addStr("ip", wifiManager->getIP());
+        jb.addStr("ssid", wifiManager->getSSID());
         jb.addInt("rssi", wifiManager->getRSSI());
     }
 
@@ -637,18 +656,18 @@ void WebServerManager::handleAccessStatus() {
     JsonBuilder jb;
     jb.startObj();
 
-    if (accessController) {
-        jb.addStr("state", accessController->getStateName());
-        jb.addStr("lastEvent", accessController->getLastEvent());
-        jb.addInt("lastFpId", accessController->getLastFingerprintId());
-        jb.addBool("localFallback", accessController->isLocalFallbackEnabled());
-        jb.addInt("serverStatus", accessController->getServerStatus());
-        jb.addInt("serverFailDuration", (int)accessController->getServerFailDuration());
-        jb.addInt("serverLatency", (int)accessController->getLastServerResponseTime());
-        jb.addBool("enrolling", accessController->isEnrolling());
-        if (accessController->isEnrolling()) {
-            jb.addInt("enrollStep", accessController->getEnrollStep());
-            jb.addInt("enrollFpId", accessController->getEnrollingFpId());
+    if (true) {
+        jb.addStr("state", ac_getStateName(RACCESS));
+        jb.addStr("lastEvent", ac_getLastEvent(RACCESS));
+        jb.addInt("lastFpId", ac_getLastFpId(RACCESS));
+        jb.addBool("localFallback", ac_isLocalFallbackEnabled(RACCESS));
+        jb.addInt("serverStatus", (serverClient->isConfigured() ? (serverClient->isServerReachable()?0:1) : 2));
+        jb.addInt("serverFailDuration", (int)ac_getServerFailDuration(RACCESS, serverClient));
+        jb.addInt("serverLatency", (int)ac_getLastServerResponseTime(RACCESS, serverClient));
+        jb.addBool("enrolling", ac_isEnrolling(RACCESS));
+        if (ac_isEnrolling(RACCESS)) {
+            jb.addInt("enrollStep", ac_getEnrollStep(RACCESS));
+            jb.addInt("enrollFpId", ac_getEnrollingFpId(RACCESS));
         }
     } else {
         jb.addStr("state", "unavailable");
@@ -677,8 +696,8 @@ void WebServerManager::handleAccessServerConfig() {
             jb.addBool("configured", false);
             jb.addBool("reachable", false);
         }
-        if (accessController) {
-            jb.addBool("localFallback", accessController->isLocalFallbackEnabled());
+        if (true) {
+            jb.addBool("localFallback", ac_isLocalFallbackEnabled(RACCESS));
         }
         jb.endObj();
         sendJson(jb.str());
@@ -711,7 +730,7 @@ void WebServerManager::handleAccessServerConfig() {
             if (serverClient) serverClient->setAuthToken(req.token);
             storage.putString("cfg_server_token", req.token);
         }
-        if (accessController) accessController->setLocalFallbackEnabled(localFallback);
+        // localFallback handled via registry
 
         sendJson("{\"success\":true}");
     }
@@ -724,13 +743,13 @@ void WebServerManager::handleFingerprintEnroll() {
         // Enrollment status poll
         JsonBuilder jb;
         jb.startObj();
-        if (accessController) {
-            jb.addBool("enrolling", accessController->isEnrolling());
-            jb.addInt("step", accessController->getEnrollStep());
-            jb.addInt("fpId", accessController->getEnrollingFpId());
+        if (true) {
+            jb.addBool("enrolling", ac_isEnrolling(RACCESS));
+            jb.addInt("step", ac_getEnrollStep(RACCESS));
+            jb.addInt("fpId", ac_getEnrollingFpId(RACCESS));
 
             const char* stepStr = "idle";
-            switch (accessController->getEnrollStep()) {
+            switch (ac_getEnrollStep(RACCESS)) {
             case -2: stepStr = "failed"; break;
             case -1: stepStr = "idle"; break;
             case 0:  stepStr = "waiting"; break;
@@ -761,7 +780,7 @@ void WebServerManager::handleFingerprintEnroll() {
         return;
     }
 
-    if (accessController && accessController->beginEnrollment(req.fpId)) {
+    if ( ac_beginEnrollment(RACCESS, fpDriver, req.fpId)) {
         JsonBuilder jb;
         jb.startObj();
         jb.addBool("success", true);
@@ -786,7 +805,7 @@ void WebServerManager::handleFingerprintDelete() {
         return;
     }
 
-    if (accessController && accessController->deleteFingerprint(req.fpId)) {
+    if ( ac_deleteFingerprint(RACCESS, fpDriver, req.fpId)) {
         sendJson("{\"success\":true}");
     } else {
         sendError(500, "Delete failed");
@@ -798,7 +817,7 @@ void WebServerManager::handleDoorControl() {
 
     if (uri.indexOf("/unlock") > 0) {
         // Remote unlock
-        if (accessController && accessController->remoteUnlock()) {
+        if ( ac_remoteUnlock(RACCESS, g_registry.getDoorService())) {
             sendJson("{\"success\":true,\"message\":\"Door unlocking\"}");
         } else {
             sendError(409, "Door busy or not available");
@@ -808,8 +827,8 @@ void WebServerManager::handleDoorControl() {
         JsonBuilder jb;
         jb.startObj();
         // DoorService is accessed via AccessController
-        if (accessController) {
-            const char* state = accessController->getStateName();
+        if (true) {
+            const char* state = ac_getStateName(RACCESS);
             jb.addStr("state", state);
         } else {
             jb.addStr("state", "unavailable");
@@ -853,13 +872,37 @@ String WebServerManager::stateToString(int state) {
     return (state >= 0 && state < 9) ? String(states[state]) : "UNKNOWN";
 }
 
-void WebServerManager::setStateManager(StateManager* sm) { stateManager = sm; }
-void WebServerManager::setToolRepository(ToolRepository* tr) { toolRepo = tr; }
-void WebServerManager::setUserRepository(UserRepository* ur) { userRepo = ur; }
-void WebServerManager::setLogRepository(LogRepository* lr) { logRepo = lr; }
-void WebServerManager::setWeightService(WeightService* ws) { weightService = ws; }
-void WebServerManager::setWiFiManager(WiFiManager* wm) { wifiManager = wm; }
-void WebServerManager::setSystemStatus(SystemStatus* ss) { systemStatus = ss; }
-void WebServerManager::setAccessController(AccessController* ac) { accessController = ac; }
+void WebServerManager::setStateManager(StateManager*) { }
+void WebServerManager::setToolRepository(ToolRepository*) { }
+void WebServerManager::setUserRepository(UserRepository*) { }
+void WebServerManager::setLogRepository(LogRepository*) { }
+void WebServerManager::setWeightService(WeightService*) { }
+void WebServerManager::setWiFiManager(WiFiManager*) { }
+void WebServerManager::setSystemStatus(SystemStatus*) { }
+void WebServerManager::setFingerprintDriver(FingerprintDriver* fp) { fpDriver = fp; }
 void WebServerManager::setServerClient(ServerClient* sc) { serverClient = sc; }
 void WebServerManager::notifyClients(const char* event, const char* data) {}
+
+// ---- Global wrapper functions for main.cpp ----
+// Pointer — only created in STA mode. AP mode uses WiFiManager's configPortal only.
+static WebServerManager* s_webServer = nullptr;
+
+void web_begin() {
+    if (!s_webServer) {
+        s_webServer = new WebServerManager(EventBus::getInstance());
+    }
+    s_webServer->begin();
+    LOG_INFO("WEB", "Started (registry-backed)");
+}
+
+void web_stop() {
+    if (s_webServer) {
+        delete s_webServer;
+        s_webServer = nullptr;
+        LOG_INFO("WEB", "Stopped");
+    }
+}
+
+void web_handle() {
+    if (s_webServer) s_webServer->handle();
+}

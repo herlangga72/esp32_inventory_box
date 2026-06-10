@@ -3,41 +3,48 @@
 
 #include <Arduino.h>
 
-// HX711 Load Cell Amplifier
+#ifdef WOKWI_SIM
+// ---- Wokwi pin mapping (wokwi-esp32-devkit-v1 exposes D2-D35 only) ----
+#define PIN_HX711_DT     25    // D25 (physical: 16, not exposed on Wokwi)
+#define PIN_HX711_SCK    26    // D26 (physical: 17, not exposed on Wokwi)
+#define PIN_HX711_DRDY   34    // D34 (Wokwi HX711 model lacks DRDY — interrupt never fires)
+#else
+// ---- Physical hardware pin mapping ----
 #define PIN_HX711_DT     16
 #define PIN_HX711_SCK    17
 #define PIN_HX711_DRDY   36
+#endif
 
 // MPU-6050 Motion Sensor
-#define PIN_MPU_INT      35
-#define PIN_MPU_SDA      21
-#define PIN_MPU_SCL      22
+#define PIN_MPU_INT      35    // D35 available on both
+#define PIN_MPU_SDA      21    // D21 available on both
+#define PIN_MPU_SCL      22    // D22 available on both
 #define MPU6050_ADDR     0x68
 
 // SSD1306 OLED Display
-#define PIN_DISPLAY_SDA  21
-#define PIN_DISPLAY_SCL  22
-#define PIN_DISPLAY_RST  19
+#define PIN_DISPLAY_SDA  21    // D21 (shared I2C with MPU6050)
+#define PIN_DISPLAY_SCL  22    // D22
+#define PIN_DISPLAY_RST  19    // D19
 #define DISPLAY_ADDR     0x3C
 
 // Button
-#define PIN_BUTTON       33
+#define PIN_BUTTON       33    // D33
 
 // Status LED (built-in blue LED on most ESP32 dev boards, active LOW)
-#define PIN_LED          2
+#define PIN_LED          2     // D2
 
 // Fingerprint Sensor (R307/AS608 via UART2, remapped)
-#define PIN_FP_RX         5
-#define PIN_FP_TX         4
+#define PIN_FP_RX         5    // D5
+#define PIN_FP_TX         4    // D4
 #define FP_BAUDRATE       57600
 
 // Relay (solenoid door lock)
-#define PIN_RELAY         13
+#define PIN_RELAY         13    // D13
 #define RELAY_ACTIVE_STATE LOW   // LOW = relay energized = door unlocked (safe-fail)
 #define RELAY_DURATION_MS 5000   // pulse duration in ms
 
 // Door Sensor (reed switch)
-#define PIN_DOOR_SENSOR   14    // INPUT_PULLUP, LOW = door closed, HIGH = door open
+#define PIN_DOOR_SENSOR   14    // D14, INPUT_PULLUP, LOW = door closed, HIGH = door open
 
 // Server communication
 #define SERVER_TIMEOUT_MS       5000

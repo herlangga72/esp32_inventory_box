@@ -1,243 +1,173 @@
 #include "SystemStatus.h"
 #include "../utils/LogManager.h"
+#include <cstring>
 
-SystemStatus& SystemStatus::getInstance() {
-    static SystemStatus instance;
-    return instance;
-}
-
-void SystemStatus::begin() {
-    bootStart = millis();
-    totalErrorCount = 0;
-    bootComplete = false;
-    
-    // Register all components
-    components.clear();
-    
-    ComponentInfo storage;
-    storage.name = "Storage";
-    components.push_back(storage);
-    
-    ComponentInfo hx711;
-    hx711.name = "HX711";
-    components.push_back(hx711);
-    
-    ComponentInfo mpu;
-    mpu.name = "MPU6050";
-    components.push_back(mpu);
-    
-    ComponentInfo display;
-    display.name = "Display";
-    components.push_back(display);
-    
-    ComponentInfo wifi;
-    wifi.name = "WiFi";
-    components.push_back(wifi);
-    
-    ComponentInfo webserver;
-    webserver.name = "WebServer";
-    components.push_back(webserver);
-    
-    LOG_INFO("STATUS", "SystemStatus initialized");
-}
-
-void SystemStatus::update() {
-    // Could add periodic health checks here
-}
-
-ComponentInfo* SystemStatus::findComponent(const char* name) {
-    for (auto& comp : components) {
-        if (comp.name == name) {
-            return &comp;
+static ComponentInfoFixed* findComponent(SystemStatusMemory* mem, const char* name) {
+    for (int i = 0; i < mem->componentCount; i++) {
+        if (strcmp(mem->components[i].name, name) == 0) {
+            return &mem->components[i];
         }
     }
     return nullptr;
 }
 
-void SystemStatus::ensureComponent(const char* name) {
-    if (!findComponent(name)) {
-        ComponentInfo comp;
-        comp.name = name;
-        components.push_back(comp);
-    }
+static ComponentInfoFixed* ensureComponent(SystemStatusMemory* mem, const char* name) {
+    ComponentInfoFixed* existing = findComponent(mem, name);
+    if (existing) return existing;
+
+    if (mem->componentCount >= MAX_COMPONENTS) return nullptr;
+
+    ComponentInfoFixed* comp = &mem->components[mem->componentCount++];
+    memset(comp, 0, sizeof(ComponentInfoFixed));
+    strncpy(comp->name, name, sizeof(comp->name) - 1);
+    comp->status = ComponentStatus::UNKNOWN;
+    return comp;
 }
 
-void SystemStatus::markOK(const char* component) {
-    ComponentInfo* comp = findComponent(component);
-    if (!comp) {
-        ensureComponent(component);
-        comp = findComponent(component);
+void ss_begin(SystemStatusMemory* mem) {
+    memset(mem, 0, sizeof(SystemStatusMemory));
+    mem->bootStartMs = millis();
+    mem->currentBootStage = static_cast<uint8_t>(BootStage::BS_STORAGE);
+    mem->currentOpMode = static_cast<uint8_t>(OperationalMode::OP_AP_FULL);
+
+    // Pre-register all components
+    const char* names[] = {"Storage", "HX711", "MPU6050", "Display", "WiFi",
+                           "WebServer", "Fingerprint", "Door", "ServerClient",
+                           "AccessController"};
+    for (int i = 0; i < 10; i++) {
+        ensureComponent(mem, names[i]);
     }
-    
+
+    LOG_INFO("STATUS", "SystemStatus initialized");
+}
+
+void ss_update(SystemStatusMemory* mem) {}
+
+void ss_markOK(SystemStatusMemory* mem, const char* component) {
+    ComponentInfoFixed* comp = ensureComponent(mem, component);
     if (comp) {
         comp->status = ComponentStatus::OK;
         LOG_INFO("STATUS", "%s: OK", component);
     }
 }
 
-void SystemStatus::markWarning(const char* component, const char* error) {
-    ComponentInfo* comp = findComponent(component);
-    if (!comp) {
-        ensureComponent(component);
-        comp = findComponent(component);
-    }
-    
+void ss_markWarning(SystemStatusMemory* mem, const char* component, const char* error) {
+    ComponentInfoFixed* comp = ensureComponent(mem, component);
     if (comp) {
         comp->status = ComponentStatus::WARNING;
-        comp->lastError = error;
+        strncpy(comp->lastError, error, sizeof(comp->lastError) - 1);
         comp->errorTime = millis();
         comp->errorCount++;
-        lastError = String(component) + ": " + error;
-        totalErrorCount++;
-        
+        snprintf(mem->lastErrorMsg, sizeof(mem->lastErrorMsg), "%s: %s", component, error);
+        mem->totalErrorCount++;
         LOG_INFO("STATUS", "%s: WARNING - %s", component, error);
     }
 }
 
-void SystemStatus::markError(const char* component, const char* error) {
-    ComponentInfo* comp = findComponent(component);
-    if (!comp) {
-        ensureComponent(component);
-        comp = findComponent(component);
-    }
-    
+void ss_markError(SystemStatusMemory* mem, const char* component, const char* error) {
+    ComponentInfoFixed* comp = ensureComponent(mem, component);
     if (comp) {
         comp->status = ComponentStatus::ERROR;
-        comp->lastError = error;
+        strncpy(comp->lastError, error, sizeof(comp->lastError) - 1);
         comp->errorTime = millis();
         comp->errorCount++;
-        lastError = String(component) + ": " + error;
-        totalErrorCount++;
-        
+        snprintf(mem->lastErrorMsg, sizeof(mem->lastErrorMsg), "%s: %s", component, error);
+        mem->totalErrorCount++;
         LOG_INFO("STATUS", "%s: ERROR - %s", component, error);
     }
 }
 
-ComponentStatus SystemStatus::getStatus(const char* component) {
-    ComponentInfo* comp = findComponent(component);
-    return comp ? comp->status : ComponentStatus::UNKNOWN;
-}
-
-ComponentStatus SystemStatus::getOverallStatus() {
-    bool hasError = false;
-    bool hasWarning = false;
-    
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::ERROR) hasError = true;
-        if (comp.status == ComponentStatus::WARNING) hasWarning = true;
-    }
-    
-    if (hasError) return ComponentStatus::ERROR;
-    if (hasWarning) return ComponentStatus::WARNING;
-    
-    // Check if all known components are OK
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::UNKNOWN) {
-            return ComponentStatus::WARNING;
+ComponentStatus ss_getStatus(const SystemStatusMemory* mem, const char* component) {
+    for (int i = 0; i < mem->componentCount; i++) {
+        if (strcmp(mem->components[i].name, component) == 0) {
+            return mem->components[i].status;
         }
     }
-    
+    return ComponentStatus::UNKNOWN;
+}
+
+ComponentStatus ss_getOverallStatus(const SystemStatusMemory* mem) {
+    bool hasError = false, hasWarning = false;
+    for (int i = 0; i < mem->componentCount; i++) {
+        if (mem->components[i].status == ComponentStatus::ERROR) hasError = true;
+        if (mem->components[i].status == ComponentStatus::WARNING) hasWarning = true;
+    }
+    if (hasError) return ComponentStatus::ERROR;
+    if (hasWarning) return ComponentStatus::WARNING;
+    for (int i = 0; i < mem->componentCount; i++) {
+        if (mem->components[i].status == ComponentStatus::UNKNOWN) return ComponentStatus::WARNING;
+    }
     return ComponentStatus::OK;
 }
 
-String SystemStatus::getLastError() {
-    return lastError;
+const char* ss_getLastError(const SystemStatusMemory* mem) { return mem->lastErrorMsg; }
+int ss_getErrorCount(const SystemStatusMemory* mem) { return mem->totalErrorCount; }
+unsigned long ss_getUptime(const SystemStatusMemory* mem) {
+    return mem->bootComplete ? (millis() - mem->bootStartMs) : 0;
 }
-
-int SystemStatus::getErrorCount() {
-    return totalErrorCount;
-}
-
-unsigned long SystemStatus::getUptime() {
-    return bootComplete ? (millis() - bootStart) : 0;
-}
-
-bool SystemStatus::hasErrors() {
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::ERROR || 
-            comp.status == ComponentStatus::WARNING) {
-            return true;
-        }
+bool ss_hasErrors(const SystemStatusMemory* mem) {
+    for (int i = 0; i < mem->componentCount; i++) {
+        if (mem->components[i].status == ComponentStatus::ERROR ||
+            mem->components[i].status == ComponentStatus::WARNING) return true;
     }
     return false;
 }
 
-std::vector<ComponentInfo> SystemStatus::getAllComponents() {
-    return components;
+int ss_getOKCount(const SystemStatusMemory* mem) {
+    int c = 0;
+    for (int i = 0; i < mem->componentCount; i++)
+        if (mem->components[i].status == ComponentStatus::OK) c++;
+    return c;
 }
 
-int SystemStatus::getOKCount() {
-    int count = 0;
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::OK) count++;
-    }
-    return count;
+int ss_getWarningCount(const SystemStatusMemory* mem) {
+    int c = 0;
+    for (int i = 0; i < mem->componentCount; i++)
+        if (mem->components[i].status == ComponentStatus::WARNING) c++;
+    return c;
 }
 
-int SystemStatus::getWarningCount() {
-    int count = 0;
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::WARNING) count++;
-    }
-    return count;
+int ss_getErrorComponentCount(const SystemStatusMemory* mem) {
+    int c = 0;
+    for (int i = 0; i < mem->componentCount; i++)
+        if (mem->components[i].status == ComponentStatus::ERROR) c++;
+    return c;
 }
 
-int SystemStatus::getErrorComponentCount() {
-    int count = 0;
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::ERROR) count++;
-    }
-    return count;
+void ss_setBootStage(SystemStatusMemory* mem, BootStage stage) {
+    mem->currentBootStage = static_cast<uint8_t>(stage);
 }
 
-void SystemStatus::setBootStage(BootStage stage) {
-    currentStage = stage;
-    LOG_INFO("STATUS", "Boot stage: %d", (int)stage);
+BootStage ss_getBootStage(const SystemStatusMemory* mem) {
+    return static_cast<BootStage>(mem->currentBootStage);
+}
+void ss_setBootComplete(SystemStatusMemory* mem) { mem->bootComplete = true; }
+bool ss_isBootComplete(const SystemStatusMemory* mem) { return mem->bootComplete; }
+
+void ss_setOperationalMode(SystemStatusMemory* mem, OperationalMode mode) {
+    mem->currentOpMode = static_cast<uint8_t>(mode);
 }
 
-BootStage SystemStatus::getBootStage() {
-    return currentStage;
+OperationalMode ss_getOperationalMode(const SystemStatusMemory* mem) {
+    return static_cast<OperationalMode>(mem->currentOpMode);
 }
 
-void SystemStatus::setBootComplete() {
-    bootComplete = true;
-    LOG_INFO("STATUS", "Boot complete");
-}
-
-void SystemStatus::setOperationalMode(OperationalMode mode) {
-    if (currentOpMode != mode) {
-        currentOpMode = mode;
-        LOG_INFO("STATUS", "OpMode: %s",
-                 mode == OperationalMode::OP_AP_FULL ? "AP_FULL" : "STA_IDLE");
-    }
-}
-
-OperationalMode SystemStatus::getOperationalMode() {
-    return currentOpMode;
-}
-
-bool SystemStatus::isBootComplete() {
-    return bootComplete;
-}
-
-void SystemStatus::clearErrors() {
-    for (auto& comp : components) {
-        if (comp.status == ComponentStatus::ERROR || 
-            comp.status == ComponentStatus::WARNING) {
-            comp.status = ComponentStatus::OK;
-            comp.lastError = "";
-            comp.errorCount = 0;
+void ss_clearErrors(SystemStatusMemory* mem) {
+    for (int i = 0; i < mem->componentCount; i++) {
+        if (mem->components[i].status == ComponentStatus::ERROR ||
+            mem->components[i].status == ComponentStatus::WARNING) {
+            mem->components[i].status = ComponentStatus::OK;
+            mem->components[i].lastError[0] = '\0';
+            mem->components[i].errorCount = 0;
         }
     }
-    lastError = "";
-    LOG_INFO("STATUS", "Errors cleared");
+    mem->lastErrorMsg[0] = '\0';
 }
 
-void SystemStatus::resetComponent(const char* component) {
-    ComponentInfo* comp = findComponent(component);
+void ss_resetComponent(SystemStatusMemory* mem, const char* component) {
+    ComponentInfoFixed* comp = findComponent(mem, component);
     if (comp) {
         comp->status = ComponentStatus::UNKNOWN;
-        comp->lastError = "";
-        LOG_INFO("STATUS", "%s reset", component);
+        comp->lastError[0] = '\0';
     }
 }

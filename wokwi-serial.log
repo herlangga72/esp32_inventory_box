@@ -1,0 +1,107 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:1156
+load:0x40078000,len:11456
+ho 0 tail 12 room 4
+load:0x40080400,len:2972
+entry 0x400805dc
+[  2554][E][Preferences.cpp:96] remove(): nvs_erase_key fail: wifi_ssid NOT_FOUND
+[  2563][E][Preferences.cpp:96] remove(): nvs_erase_key fail: wifi_pass NOT_FOUND
+E (1256) SPIFFS: spiffs partition could not be found
+[  2582][E][SPIFFS.cpp:89] begin(): Mounting SPIFFS failed! Error: 261
+[LOG] WARN: Log file init failed — file logging disabled
+[LOG] Logger task started
+[00:00:02.603] [INFO] [INIT] 
+[00:00:02.604] [INFO] [INIT] ===========================================
+[00:00:02.605] [INFO] [INIT] ESP32 Inventory Box Starting...
+[00:00:02.606] [INFO] [INIT] ===========================================
+[00:00:02.606] [INFO] [INIT] Initializing Service Registry...
+[00:00:02.608] [INFO] [REG] INIT magic=0x53455256 v=1 services=23 boot=1
+[00:00:02.608] [INFO] [STATUS] SystemStatus initialized
+[00:00:02.609] [INFO] [INIT] Core 0 worker launched (I2C sensors)
+[00:00:02.609] [INFO] [INIT] Initializing Storage (max 0 retries)...
+[00:00:02.609] [INFO] [INIT] Initializing MPU6050 (max 3 retries)...
+[00:00:02.609] [INFO] [STATUS] Storage: ERROR - DISABLED (exceeded 0 retries) — NVS initialization failed
+[00:00:02.610] [ERROR] [INIT] Storage: DISABLED (exceeded 0 retries) — NVS initialization failed
+[00:00:02.610] [INFO] [INIT] Initializing HX711 (max 3 retries)...
+[00:00:02.659] [WARN] [INIT] HX711: FAILED — retry 1/3 in 300ms...
+[00:00:02.711] [INFO] [INIT] MPU6050: OK
+E (3212) i2c: i2c driver install error
+[00:00:02.711] [INFO] [STATUS] MPU6050: OK
+[00:00:02.711] [INFO] [INIT] Initializing Display (max 2 retries)...
+[00:00:02.761] [WARN] [INIT] Display: FAILED — retry 1/2 in 300ms...
+[00:00:03.009] [WARN] [INIT] HX711: FAILED — retry 2/3 in 600ms...
+E (3563) i2c: i2c driver install error
+[00:00:03.111] [WARN] [INIT] Display: FAILED — retry 2/2 in 600ms...
+[00:00:03.660] [WARN] [INIT] HX711: FAILED — retry 3/3 in 1200ms...
+E (4213) i2c: i2c driver install error
+[00:00:03.762] [INFO] [STATUS] Display: ERROR - DISABLED (exceeded 2 retries) — I2C address 0x3C not found - check wiring
+[00:00:03.762] [ERROR] [INIT] Display: DISABLED (exceeded 2 retries) — I2C address 0x3C not found - check wiring
+[00:00:04.912] [INFO] [STATUS] HX711: ERROR - DISABLED (exceeded 3 retries) — No response - check wiring (DT=16, SCK=17)
+[00:00:04.913] [ERR[  4916][E][Preferences.cpp:503] getBytesLength(): nvs_get_blob len fail: baseline NOT_FOUND
+OR] [INIT] HX711: DISABLED (exceeded 3 retries) — No response - check wiring (DT=16, SCK=17)
+[00:00:04.914] [INFO] [INIT] Phase 1 complete (all sensors)
+[00:00:04.914] [INFO] [INIT] Configuring interrupts...
+[00:00:04.915] [INFO] [INIT] Interrupts: OK
+[00:00:04.915] [INFO] [INIT] HX711 interrupt disabled (sensor offline)
+[00:00:04.915] [INFO] [INIT] Registering service mailboxes...
+[00:00:04.916] [INFO] [INIT] Initializing services...
+[00:00:04.972] [INFO] [STATE] State: 0 -> 1
+
+[00:00:04.972] [INFO] [STATE] StateManager initialized (baseline=0)
+
+[00:00:04.974] [INFO] [POWER] Cold b[  4975][E][Preferences.cpp:460] getString(): nvs_get_str len fail: wifi_ssid NOT_FOUND
+oot
+[00:00:04.974] [WARN] [POWER] PM configure failed: 262
+[00:00:04.974] [INFO] [INIT] Initializing WiFi...
+[00:00:05.003] [INFO] [WIFI] Starting AP mode...
+[00:00:05.259] [INFO] [WIFI] AP active: Inventory-Box-Setup  IP: 192.168.4.1
+[00:00:05.263] [INFO] [INIT] WiFi init complete
+[00:00:05.264] [INFO] [STATUS] WiFi: WARNING - No credentials stored - AP mode active
+[00:00:05.265] [INFO] [INIT] WiFi: WARNING - AP mode (no credentials)
+[00:00:05.265] [INFO] [INIT] WebServer: SKIPPED (AP mode - configPortal active)
+[00:00:05.265] [INFO] [INIT] Initializing Fingerprint (max 3 retries)...
+[00:00:05.296] [INFO] [DOOR] INIT state=LOCKED reed=open relay=off
+[00:00:05.298] [INFO] [STATUS] Door: OK
+[00:00:05.298] [INFO] [INIT] Door: [  5299][E][Preferences.cpp:483] getString(): nvs_get_str len fail: cfg_server_url NOT_FOUND
+OK
+[  5318][E][Preferences.cpp:483] getString(): nvs_get_str len fail: cfg_server_token NOT_FOUND
+[00:00:05.328] [INFO] [STATUS] ServerClient: WARNING - No server URL configured
+[  5329][E][Preferences.cpp:460] getString(): nvs_get_str len fail: cfg_access_local_fallback NOT_FOUND
+[00:00:05.345] [INFO] [ACCESS] INIT localFallback=0
+[00:00:05.346] [INFO] [STATUS] AccessController: OK
+[00:00:05.346] [INFO] [INIT] AccessController: OK
+[00:00:05.347] [INFO] [INIT] DisplayManager: SKIPPED (display offline)
+[00:00:05.347] [INFO] [INIT] 
+[00:00:05.347] [INFO] [INIT] ===========================================
+[00:00:05.347] [INFO] [INIT] WiFi AP MODE ACTIVE
+[00:00:05.347] [INFO] [INIT] SSID: Inventory-Box-Setup
+[00:00:05.347] [INFO] [INIT] AP IP: 192.168.4.1
+[00:00:05.347] [INFO] [INIT] Connect to configure WiFi credentials
+[00:00:05.347] [INFO] [INIT] 
+[00:00:05.347] [INFO] [INIT] ===========================================
+[00:00:05.347] [INFO] [INIT] COMPONENT STATUS:
+[00:00:05.347] [INFO] [INIT] -------------------------------------------
+[00:00:05.348] [INFO] [INIT] Storage:     [FAIL]
+[00:00:05.348] [INFO] [INIT] HX711:       [FAIL]
+[00:00:05.348] [INFO] [INIT] MPU6050:     [OK]
+[00:00:05.348] [INFO] [INIT] Display:     [FAIL]
+[00:00:05.348] [INFO] [INIT] WiFi:        [OK]
+[00:00:05.348] [INFO] [INIT] WebServer:   [FAIL]
+[00:00:05.348] [INFO] [INIT] Fingerprint: [---]
+[00:00:05.348] [INFO] [INIT] Door:        [OK]
+[00:00:05.348] [INFO] [INIT] Server:      [WARN]
+[00:00:05.349] [INFO] [INIT] AccessCtrl:  [OK]
+[00:00:05.349] [INFO] [INIT] ===========================================
+[00:00:05.349] [INFO] [INIT] WARNING: Some components failed to initialize!
+[00:00:05.349] [INFO] [INIT] Last error: ServerClient: No server URL configured
+[00:00:05.349] [INFO] [INIT] System will continue with reduced functionality
+[00:00:05.349] [INFO] [INIT] ===========================================
+[00:00:08.306] [WARN] [FINGERP] Sensor not responding on RX=5 TX=4 baud=57600
+[00:00:08.306] [WARN] [INIT] Fingerprint: FAILED — retry 1/3 in 300ms...
+[00:00:12.963] [WARN] [FINGERP] Sensor not responding on RX=5 TX=4 baud=57600
+[00:00:12.963] [WARN] [INIT] Fingerprint: FAILED — retry 2/3 in 600ms...

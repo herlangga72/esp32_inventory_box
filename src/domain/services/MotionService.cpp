@@ -1,123 +1,61 @@
 #include "MotionService.h"
 #include "../events/EventBus.h"
+#include "../../config/Config.h"
 #include <math.h>
 
-MotionService::MotionService(MPU6050Driver* driver)
-    : mpu(driver), currentMotion(MotionType::NONE) {
-    restingAccel[0] = restingAccel[1] = restingAccel[2] = 0;
-    currentAccel[0] = currentAccel[1] = currentAccel[2] = 0;
-}
+void ms_update(MotionServiceMemory* mem, MPU6050Driver* mpu) {
+    // 1. Read current acceleration from the sensor
+    mpu->readAccel(mem->currentAccel[0], mem->currentAccel[1], mem->currentAccel[2]);
 
-void MotionService::begin() {
-    mpu->begin();
-}
+    // 2. Compute deltas from the resting baseline
+    float dx = mem->currentAccel[0] - mem->restingAccel[0];
+    float dy = mem->currentAccel[1] - mem->restingAccel[1];
+    float dz = mem->currentAccel[2] - mem->restingAccel[2];
 
-void MotionService::update() {
-    mpu->readAccel(currentAccel[0], currentAccel[1], currentAccel[2]);
-    
-    MotionType newMotion = classifyMotion(
-        currentAccel[0] - restingAccel[0],
-        currentAccel[1] - restingAccel[1],
-        currentAccel[2] - restingAccel[2]
-    );
-    
-    if (newMotion != currentMotion) {
-        currentMotion = newMotion;
-        
-        // Publish motion event
+    // 3. Classify motion (same logic as the original MotionService::update)
+    float magnitude = sqrt(dx * dx + dy * dy + dz * dz);
+    float zDelta    = fabs(mem->currentAccel[2] - mem->restingAccel[2]);
+
+    float totalMag  = sqrt(mem->currentAccel[0] * mem->currentAccel[0] +
+                           mem->currentAccel[1] * mem->currentAccel[1] +
+                           mem->currentAccel[2] * mem->currentAccel[2]);
+
+    MotionType newMotion;
+    if (totalMag < Config::FREE_FALL_THRESHOLD_G) {
+        newMotion = MotionType::FREE_FALL;
+    } else if (zDelta > Config::TILT_THRESHOLD_G) {
+        newMotion = MotionType::TILT;
+    } else if (magnitude > Config::MOTION_THRESHOLD_G) {
+        if (magnitude > 0.5f) {
+            newMotion = MotionType::MOVEMENT;
+        } else {
+            newMotion = MotionType::VIBRATION;
+        }
+    } else {
+        newMotion = MotionType::SETTLED;
+    }
+
+    // 4. If the motion type changed, dispatch events
+    if (newMotion != static_cast<MotionType>(mem->currentMotion)) {
+        mem->currentMotion = static_cast<uint8_t>(newMotion);
+
+        // Send MOTION_DETECTED to StateManager mailbox
+        ServiceMessage sm = ServiceMessage::cmd(
+            ServiceId::STATE_MANAGER,
+            static_cast<uint8_t>(StateMsgType::MOTION_DETECTED));
+        sm.bytes.b0 = static_cast<uint8_t>(newMotion);
+        g_registry.send(ServiceId::STATE_MANAGER, sm);
+
+        // Publish MOTION_DETECTED to EventBus for backward compatibility
         EventPayload event;
         event.type = DomainEvent::MOTION_DETECTED;
         event.timestamp = millis();
-        event.data.motion.ax = currentAccel[0];
-        event.data.motion.ay = currentAccel[1];
-        event.data.motion.az = currentAccel[2];
-        event.data.motion.motion = currentMotion;
-        
+        event.data.motion.ax     = mem->currentAccel[0];
+        event.data.motion.ay     = mem->currentAccel[1];
+        event.data.motion.az     = mem->currentAccel[2];
+        event.data.motion.motion = newMotion;
         EventBus::getInstance()->publish(event);
     }
-}
 
-MotionType MotionService::classifyMotion(float dx, float dy, float dz) {
-    float magnitude = sqrt(dx*dx + dy*dy + dz*dz);
-    float zDelta = abs(currentAccel[2] - restingAccel[2]);
-    
-    // Free fall (all axes near 0)
-    float totalMag = sqrt(currentAccel[0]*currentAccel[0] + 
-                          currentAccel[1]*currentAccel[1] + 
-                          currentAccel[2]*currentAccel[2]);
-    if (totalMag < Config::FREE_FALL_THRESHOLD_G) {
-        return MotionType::FREE_FALL;
-    }
-    
-    // Significant tilt (Z-axis change)
-    if (zDelta > Config::TILT_THRESHOLD_G) {
-        return MotionType::TILT;
-    }
-    
-    // Vibration or movement
-    if (magnitude > Config::MOTION_THRESHOLD_G) {
-        if (magnitude > 0.5f) {
-            return MotionType::MOVEMENT;
-        }
-        return MotionType::VIBRATION;
-    }
-    
-    // Settled (baseline + noise)
-    return MotionType::SETTLED;
-}
-
-bool MotionService::detectTilt(float ax, float ay, float az) {
-    float zDelta = abs(az - restingAccel[2]);
-    return zDelta > Config::TILT_THRESHOLD_G;
-}
-
-bool MotionService::detectFreeFall(float magnitude) {
-    return magnitude < Config::FREE_FALL_THRESHOLD_G;
-}
-
-MotionType MotionService::getCurrentMotion() {
-    return currentMotion;
-}
-
-void MotionService::getAcceleration(float& ax, float& ay, float& az) {
-    ax = currentAccel[0];
-    ay = currentAccel[1];
-    az = currentAccel[2];
-}
-
-bool MotionService::isLidOpen() {
-    // Lid open = significant tilt in Z-axis
-    return detectTilt(currentAccel[0] - restingAccel[0],
-                     currentAccel[1] - restingAccel[1],
-                     currentAccel[2] - restingAccel[2]);
-}
-
-bool MotionService::isBoxPickedUp() {
-    // Box picked up = significant movement
-    return currentMotion == MotionType::MOVEMENT;
-}
-
-void MotionService::calibrateBaseline() {
-    mpu->readAccel(restingAccel[0], restingAccel[1], restingAccel[2]);
-
-    restingAccel[2] -= 1.0f;  // Remove gravity component (Z reads ~1g when flat)
-    
-    EventBus::getInstance()->publish(DomainEvent::CALIBRATION_COMPLETE);
-}
-
-void MotionService::getBaseline(float& bx, float& by, float& bz) {
-    bx = restingAccel[0];
-    by = restingAccel[1];
-    bz = restingAccel[2];
-}
-
-void MotionService::setBaseline(float bx, float by, float bz) {
-    restingAccel[0] = bx;
-    restingAccel[1] = by;
-    restingAccel[2] = bz;
-}
-
-bool MotionService::isMotionDetected() {
-    return currentMotion != MotionType::NONE && 
-           currentMotion != MotionType::SETTLED;
+    mem->messagesProcessed++;
 }

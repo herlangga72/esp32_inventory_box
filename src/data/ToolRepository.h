@@ -2,40 +2,25 @@
 #define TOOL_REPOSITORY_H
 
 #include <Arduino.h>
-#include <vector>
 #include "../domain/entities/Tool.h"
-#include "StorageManager.h"
-#include "config/Config.h"
+#include "../kernel/ServiceRegistry.h"
 
-class ToolRepository {
-public:
-    ToolRepository(StorageManager* storage);
-    
-    // CRUD
-    int create(Tool* tool);
-    bool update(int id, Tool* tool);
-    bool remove(int id);
-    Tool* findById(int id);
-    
-    // Query
-    std::vector<Tool> findAll();
-    std::vector<Tool> findActive();
-    int count();
-    
-    // Serialization helpers
-    void serialize(const Tool& tool, char* buffer, size_t len);
-    Tool deserialize(const char* buffer);
-    
-private:
-    StorageManager* storage;
-    Tool cache[Config::MAX_TOOLS];
-    bool cacheValid;
-    
-    void invalidateCache();
-    void loadCache();
-    void saveCache();
-    char* getKey(int id, char* buffer);
-    Tool deserializeLegacy(const char* buffer);
-};
+class StorageManager;
 
-#endif // TOOL_REPOSITORY_H
+// Free functions operating on ToolRepositoryMemory*
+void tr_init(ToolRepositoryMemory* mem, StorageManager* storage);
+int  tr_create(ToolRepositoryMemory* mem, StorageManager* storage, Tool* tool);
+bool tr_update(ToolRepositoryMemory* mem, StorageManager* storage, int id, Tool* tool);
+bool tr_remove(ToolRepositoryMemory* mem, StorageManager* storage, int id);
+Tool* tr_findById(ToolRepositoryMemory* mem, StorageManager* storage, int id);
+
+// Fills caller-provided buffer, returns count
+int  tr_findAll(ToolRepositoryMemory* mem, StorageManager* storage, Tool* outBuf, int maxTools);
+int  tr_findActive(ToolRepositoryMemory* mem, StorageManager* storage, Tool* outBuf, int maxTools);
+int  tr_count(ToolRepositoryMemory* mem, StorageManager* storage);
+
+// Serialization
+void tr_serialize(const Tool& tool, char* buffer, size_t len);
+Tool tr_deserialize(const char* buffer);
+
+#endif

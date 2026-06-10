@@ -2,65 +2,26 @@
 #define STATE_MANAGER_H
 
 #include <Arduino.h>
-#include "../events/EventBus.h"
-#include "../events/Events.h"
-#include "../entities/BoxState.h"
+#include "../../kernel/ServiceRegistry.h"
 
-class WeightService;
-class MotionService;
-class ToolRepository;
-class LogRepository;
+class StorageManager;  // forward declaration
 
-#include "MatchingService.h"
+// --- Initialization ---
+void sm_init(StateManagerMemory* mem, StorageManager* storage);
 
-class StateManager {
-public:
-    StateManager(EventBus* events);
-    
-    void begin();
-    void update();
-    
-    void setWeightService(WeightService* ws);
-    void setMotionService(MotionService* ms);
-    void setToolRepository(ToolRepository* tr);
-    void setLogRepository(LogRepository* lr);
-    
-    // State transitions
-    void onWeightChange(float delta);
-    void onMotionDetected(MotionType motion);
-    void onToolMatched(int toolId);
-    void onUnknownWeight(float weight);
-    void onUserLogin(int userId);
-    void onUserLogout();
-    void onCalibration(float baseline);
-    
-    void enterSleep();
-    void wake();
-    void handleWakeReason();
-    
-    BoxStateMachine getCurrentState();
-    BoxState* getState();
-    
-    float getBaseline();
-    void setBaseline(float baseline);
-    
-    int getCurrentUserId();
-    void setCurrentUserId(int userId);
+// --- Mailbox entry point ---
+void sm_dispatchMessage(StateManagerMemory* mem, const ServiceMessage& msg);
 
-private:
-    EventBus* events;
-    WeightService* weightService;
-    MotionService* motionService;
-    ToolRepository* toolRepo;
-    LogRepository* logRepo;
-    
-    BoxState boxState;
-    MatchingService matchingService;
-    unsigned long stateStartTime;
-    
-    void transition(BoxStateMachine newState);
-    bool isValidTransition(BoxStateMachine from, BoxStateMachine to);
-    void logStateEvent(const char* event);
-};
+// --- Periodic time-based transitions ---
+void sm_updatePeriodic(StateManagerMemory* mem);
+
+// --- Read queries (used by WebServer) ---
+int             sm_getCurrentState(const StateManagerMemory* mem);
+int             sm_getCurrentUserId(const StateManagerMemory* mem);
+float           sm_getBaseline(const StateManagerMemory* mem);
+
+// --- For web API contents list ---
+const int32_t*  sm_getContents(const StateManagerMemory* mem);
+int             sm_getContentCount(const StateManagerMemory* mem);
 
 #endif // STATE_MANAGER_H

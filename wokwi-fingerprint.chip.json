@@ -1,0 +1,12 @@
+{
+  "name": "R307 Fingerprint Sensor",
+  "author": "Herlangga Yusuf Syailendra",
+  "version": "1.0.0",
+  "description": "Basic R307/AS608 fingerprint sensor simulator — responds to handshake + params query",
+  "pins": [
+    { "name": "VCC", "signal": "VCC" },
+    { "name": "GND", "signal": "GND" },
+    { "name": "TX",  "signal": "TX" },
+    { "name": "RX",  "signal": "RX" }
+  ]
+}

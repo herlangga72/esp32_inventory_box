@@ -1,128 +1,118 @@
 #include "ToolRepository.h"
-#include <string.h>
+#include "StorageManager.h"
+#include "../config/Config.h"
+#include <cstring>
+#include <cstdlib>
 
-ToolRepository::ToolRepository(StorageManager* storage) 
-    : storage(storage), cacheValid(false) {}
+void tr_init(ToolRepositoryMemory* mem, StorageManager* storage) {
+    memset(mem, 0, sizeof(ToolRepositoryMemory));
+    mem->cacheValid = false;
+}
 
-int ToolRepository::create(Tool* tool) {
+int tr_create(ToolRepositoryMemory* mem, StorageManager* storage, Tool* tool) {
     int id = storage->getInt("tool_next_id", 1);
     tool->id = id;
     tool->createdAt = time(nullptr);
     tool->updatedAt = tool->createdAt;
     tool->active = true;
-    
-    // Serialize and save
-    char key[16];
-    char data[256];
-    serialize(*tool, data, sizeof(data));
-    
+
+    char key[16], data[256];
+    tr_serialize(*tool, data, sizeof(data));
     snprintf(key, sizeof(key), "tool_%d", id);
     storage->putString(key, data);
-    
-    // Update metadata
+
     storage->putInt("tool_next_id", id + 1);
-    storage->putInt("tool_count", count() + 1);
-    
-    invalidateCache();
-    
+    storage->putInt("tool_count", tr_count(mem, storage) + 1);
+
+    mem->cacheValid = false;
     return id;
 }
 
-bool ToolRepository::update(int id, Tool* tool) {
-    char key[16];
-    char data[256];
-    
+bool tr_update(ToolRepositoryMemory* mem, StorageManager* storage, int id, Tool* tool) {
+    char key[16], data[256];
     snprintf(key, sizeof(key), "tool_%d", id);
-    
     tool->id = id;
     tool->updatedAt = time(nullptr);
-    serialize(*tool, data, sizeof(data));
-    
+    tr_serialize(*tool, data, sizeof(data));
     storage->putString(key, data);
-    invalidateCache();
-    
+    mem->cacheValid = false;
     return true;
 }
 
-bool ToolRepository::remove(int id) {
+bool tr_remove(ToolRepositoryMemory* mem, StorageManager* storage, int id) {
     char key[16];
     snprintf(key, sizeof(key), "tool_%d", id);
-    
     if (storage->remove(key)) {
-        storage->putInt("tool_count", count() - 1);
-        invalidateCache();
+        storage->putInt("tool_count", tr_count(mem, storage) - 1);
+        mem->cacheValid = false;
         return true;
     }
     return false;
 }
 
-Tool* ToolRepository::findById(int id) {
-    if (!cacheValid) loadCache();
-    
-    for (int i = 0; i < count(); i++) {
-        if (cache[i].id == id) {
-            return &cache[i];
+static void loadCache(ToolRepositoryMemory* mem, StorageManager* storage) {
+    int n = tr_count(mem, storage);
+    for (int i = 0; i < n && i < Config::MAX_TOOLS; i++) {
+        char key[16], data[256];
+        snprintf(key, sizeof(key), "tool_%d", i);
+        if (storage->getChars(key, data, sizeof(data)) > 0) {
+            mem->cache[i] = tr_deserialize(data);
         }
+    }
+    mem->cacheValid = true;
+}
+
+Tool* tr_findById(ToolRepositoryMemory* mem, StorageManager* storage, int id) {
+    if (!mem->cacheValid) loadCache(mem, storage);
+    for (int i = 0; i < tr_count(mem, storage); i++) {
+        if (mem->cache[i].id == id) return &mem->cache[i];
     }
     return nullptr;
 }
 
-std::vector<Tool> ToolRepository::findAll() {
-    if (!cacheValid) loadCache();
-    
-    std::vector<Tool> result;
-    int n = storage->getInt("tool_count", 0);
-    
-    char key[16];
-    char data[256];
-    for (int i = 0; i < n; i++) {
-        snprintf(key, sizeof(key), "tool_%d", i);
-        String dataStr = storage->getString(key, "");
-        if (dataStr.length() > 0) {
-            dataStr.toCharArray(data, sizeof(data));
-            result.push_back(deserialize(data));
-        }
+int tr_findAll(ToolRepositoryMemory* mem, StorageManager* storage, Tool* outBuf, int maxTools) {
+    if (!mem->cacheValid) loadCache(mem, storage);
+    int n = tr_count(mem, storage);
+    int count = 0;
+    for (int i = 0; i < n && count < maxTools; i++) {
+        outBuf[count++] = mem->cache[i];
     }
-    
-    return result;
+    return count;
 }
 
-std::vector<Tool> ToolRepository::findActive() {
-    std::vector<Tool> all = findAll();
-    std::vector<Tool> active;
-    
-    for (auto& tool : all) {
-        if (tool.active) {
-            active.push_back(tool);
+int tr_findActive(ToolRepositoryMemory* mem, StorageManager* storage, Tool* outBuf, int maxTools) {
+    if (!mem->cacheValid) loadCache(mem, storage);
+    int n = tr_count(mem, storage);
+    int count = 0;
+    for (int i = 0; i < n && count < maxTools; i++) {
+        if (mem->cache[i].active) {
+            outBuf[count++] = mem->cache[i];
         }
     }
-    
-    return active;
+    return count;
 }
 
-int ToolRepository::count() {
+int tr_count(ToolRepositoryMemory* mem, StorageManager* storage) {
     return storage->getInt("tool_count", 0);
 }
 
-// Tiny utility: extract value for JSON key like "n":"hammer" → "hammer"
+void tr_serialize(const Tool& tool, char* buffer, size_t len) {
+    snprintf(buffer, len, "%d|%s|%.1f|%.1f|%d|%ld|%ld",
+        tool.id, tool.name, tool.weightGrams, tool.toleranceGrams,
+        tool.active ? 1 : 0, (long)tool.createdAt, (long)tool.updatedAt);
+}
+
 static const char* repoJsonGet(const char* json, const char* key) {
     const char* pos = strstr(json, key);
     if (!pos) return nullptr;
-    pos += strlen(key) + 2; // skip "key":
+    pos += strlen(key) + 2;
     if (*pos == '"') pos++;
     return pos;
 }
 
-void ToolRepository::serialize(const Tool& tool, char* buffer, size_t len) {
-    snprintf(buffer, len, "%d|%s|%.1f|%.1f|%d|%ld|%ld",
-        tool.id, tool.name, tool.weightGrams, tool.toleranceGrams,
-        tool.active ? 1 : 0, tool.createdAt, tool.updatedAt);
-}
-
-Tool ToolRepository::deserialize(const char* buffer) {
+Tool tr_deserialize(const char* buffer) {
+    Tool tool;
     if (buffer[0] == '{') {
-        // Migrate old JSON → new (re-saves as pipe on next write)
-        Tool tool;
         const char* v;
         v = repoJsonGet(buffer, "\"n\""); if (v) { char s[32]; int i=0; while(*v && *v!='"' && i<31) s[i++]=*v++; s[i]=0; tool.setName(s); }
         v = repoJsonGet(buffer, "\"id\""); tool.id = v ? atoi(v) : 0;
@@ -133,65 +123,18 @@ Tool ToolRepository::deserialize(const char* buffer) {
         v = repoJsonGet(buffer, "\"u\""); tool.updatedAt = v ? atol(v) : 0;
         return tool;
     }
-    return deserializeLegacy(buffer);
-}
 
-Tool ToolRepository::deserializeLegacy(const char* buffer) {
-    Tool tool;
+    // Pipe-delimited deserialization
     char buf[256];
     strncpy(buf, buffer, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
-
     char* p = strtok(buf, "|");
     if (p) tool.id = atoi(p);
-
-    p = strtok(NULL, "|");
-    if (p) tool.setName(p);
-
-    p = strtok(NULL, "|");
-    if (p) tool.weightGrams = atof(p);
-
-    p = strtok(NULL, "|");
-    if (p) tool.toleranceGrams = atof(p);
-
-    p = strtok(NULL, "|");
-    if (p) tool.active = (atoi(p) == 1);
-
-    p = strtok(NULL, "|");
-    if (p) tool.createdAt = atol(p);
-
-    p = strtok(NULL, "|");
-    if (p) tool.updatedAt = atol(p);
-
+    p = strtok(NULL, "|"); if (p) tool.setName(p);
+    p = strtok(NULL, "|"); if (p) tool.weightGrams = atof(p);
+    p = strtok(NULL, "|"); if (p) tool.toleranceGrams = atof(p);
+    p = strtok(NULL, "|"); if (p) tool.active = (atoi(p) == 1);
+    p = strtok(NULL, "|"); if (p) tool.createdAt = atol(p);
+    p = strtok(NULL, "|"); if (p) tool.updatedAt = atol(p);
     return tool;
-}
-
-void ToolRepository::invalidateCache() {
-    cacheValid = false;
-}
-
-void ToolRepository::loadCache() {
-    int n = count();
-    for (int i = 0; i < n && i < Config::MAX_TOOLS; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "tool_%d", i);
-        String dataStr = storage->getString(key, "");
-        if (dataStr.length() > 0) {
-            char data[256];
-            dataStr.toCharArray(data, sizeof(data));
-            cache[i] = deserialize(data);
-        }
-    }
-    cacheValid = true;
-}
-
-void ToolRepository::saveCache() {
-    int n = count();
-    for (int i = 0; i < n && i < Config::MAX_TOOLS; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "tool_%d", i);
-        char data[256];
-        serialize(cache[i], data, sizeof(data));
-        storage->putString(key, data);
-    }
 }

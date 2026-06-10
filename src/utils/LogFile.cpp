@@ -5,6 +5,8 @@
 #define SPIFFS_READ_CHUNK 256
 #define SPIFFS_DOWNLOAD_MAX 32768  // cap download at 32KB to prevent OOM
 
+static bool s_logFileReady = false;  // guards against SPIFFS-not-mounted spam
+
 // ---- Internal helpers ----
 
 static String makeRotatedPath(int n) {
@@ -35,22 +37,26 @@ static void rotateFiles() {
 
 bool logFileInit() {
     spiffsLock();
-    if (!SPIFFS.begin(true)) {
+    if (!SPIFFS.begin(false)) {  // no auto-format — fast fail if partition missing
         spiffsUnlock();
+        s_logFileReady = false;
         return false;
     }
 
     File test = SPIFFS.open(LOG_FILE_PATH, "a");
     if (!test) {
         spiffsUnlock();
+        s_logFileReady = false;
         return false;
     }
     test.close();
     spiffsUnlock();
+    s_logFileReady = true;
     return true;
 }
 
 void logFileAppend(const LogMsg& msg) {
+    if (!s_logFileReady) return;
     spiffsLock();
     File f = SPIFFS.open(LOG_FILE_PATH, "a");
     if (!f) { spiffsUnlock(); return; }

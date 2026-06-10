@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "author": "Herlangga",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": { "fullBoot": "1" }
+    },
+    {
+      "type": "wokwi-hx711",
+      "id": "hx711",
+      "top": -120,
+      "left": 400,
+      "attrs": { "weight": "0" }
+    },
+    {
+      "type": "wokwi-mpu6050",
+      "id": "mpu6050",
+      "top": -200,
+      "left": 400,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-relay-module",
+      "id": "relay",
+      "top": -80,
+      "left": 500,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn-boot",
+      "top": 200,
+      "left": -50,
+      "attrs": { "color": "red", "label": "BOOT" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led-builtin",
+      "top": 50,
+      "left": -100,
+      "attrs": { "color": "blue" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "door-pullup",
+      "top": 0,
+      "left": 500,
+      "attrs": { "value": "10000" }
+    }
+  ],
+  "connections": [
+    ["esp:TX0", "$serialMonitor:RX", "", []],
+    ["esp:RX0", "$serialMonitor:TX", "", []],
+
+    ["esp:3V3", "hx711:VCC", "red"],
+    ["esp:GND.1", "hx711:GND", "black"],
+    ["esp:D25", "hx711:DT", "green"],
+    ["esp:D26", "hx711:SCK", "blue"],
+
+    ["esp:3V3", "mpu6050:VCC", "red"],
+    ["esp:GND.1", "mpu6050:GND", "black"],
+    ["esp:D21", "mpu6050:SDA", "green"],
+    ["esp:D22", "mpu6050:SCL", "blue"],
+    ["esp:D35", "mpu6050:INT", "yellow"],
+
+    ["esp:3V3", "relay:VCC", "red"],
+    ["esp:GND.1", "relay:GND", "black"],
+    ["esp:D13", "relay:IN", "green"],
+
+    ["esp:GND.1", "btn-boot:1.l", "black"],
+    ["esp:D33", "btn-boot:1.r", "green"],
+
+    ["esp:GND.1", "led-builtin:C", "black"],
+    ["esp:D2", "led-builtin:A", "green"],
+
+    ["esp:3V3", "door-pullup:1", "red"],
+    ["esp:D14", "door-pullup:2", "green"]
+  ],
+  "serialMonitor": {
+    "display": "terminal"
+  }
+}
