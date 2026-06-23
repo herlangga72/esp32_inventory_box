@@ -46,6 +46,13 @@
       "attrs": { "color": "blue" }
     },
     {
+      "type": "wokwi-ds3231",
+      "id": "rtc",
+      "top": -300,
+      "left": 400,
+      "attrs": {}
+    },
+    {
       "type": "wokwi-resistor",
       "id": "door-pullup",
       "top": 0,
@@ -79,7 +86,12 @@
     ["esp:D2", "led-builtin:A", "green"],
 
     ["esp:3V3", "door-pullup:1", "red"],
-    ["esp:D14", "door-pullup:2", "green"]
+    ["esp:D14", "door-pullup:2", "green"],
+
+    ["esp:3V3", "rtc:VCC", "red"],
+    ["esp:GND.1", "rtc:GND", "black"],
+    ["esp:D18", "rtc:SDA", "green"],
+    ["esp:D23", "rtc:SCL", "blue"]
   ],
   "serialMonitor": {
     "display": "terminal"

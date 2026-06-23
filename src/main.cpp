@@ -17,6 +17,7 @@
 #include "hal/MPU6050Driver.h"
 #include "hal/SSD1306Driver.h"
 #include "hal/InterruptManager.h"
+#include "hal/RtcDriver.h"
 #include "hal/FingerprintDriver.h"
 #include "data/StorageManager.h"
 #include "data/ToolRepository.h"
@@ -399,6 +400,13 @@ void setup() {
     // ---- STORAGE ----
     initWithRetry("Storage", [&](){ return storage.begin(); },
         "NVS initialization failed", 0);
+
+    // ---- RTC ----
+    if (!initWithRetry("RTC", [](){ return rtc_init(); },
+        "DS3231 not found on I2C_NUM_1 (pins 18/23)", 3, 1000)) {
+        rtc_setFallbackTime();
+        LOG_INFO("INIT", "RTC: using compile-time + uptime fallback");
+    }
 
     ss_setBootStage(g_registry.getSystemStatus(), BootStage::BS_HX711);
 

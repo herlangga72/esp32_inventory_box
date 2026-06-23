@@ -51,6 +51,13 @@
 #define FP_SCAN_INTERVAL_MS     200
 #define FP_ENROLL_TIMEOUT_MS    30000
 
+// DS3231 RTC Module
+#define PIN_RTC_SDA      18    // D18 (I2C_NUM_1, separate bus from MPU6050+SSD1306)
+#define PIN_RTC_SCL      23    // D23
+#define RTC_ADDR         0x68
+#define RTC_I2C_NUM      I2C_NUM_1
+#define RTC_I2C_FREQUENCY 100000
+
 // I2C Settings
 #define I2C_FREQUENCY    400000
 

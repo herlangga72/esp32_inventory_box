@@ -33,8 +33,8 @@ void ss_begin(SystemStatusMemory* mem) {
     // Pre-register all components
     const char* names[] = {"Storage", "HX711", "MPU6050", "Display", "WiFi",
                            "WebServer", "Fingerprint", "Door", "ServerClient",
-                           "AccessController"};
-    for (int i = 0; i < 10; i++) {
+                           "AccessController", "RTC"};
+    for (int i = 0; i < 11; i++) {
         ensureComponent(mem, names[i]);
     }
 
