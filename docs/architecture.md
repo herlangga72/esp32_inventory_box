@@ -21,7 +21,7 @@ Single global `ServiceRegistry g_registry` at fixed link-time address. Every ser
 │  ├───────────────────────────────────────────────────┤  │
 │  │ halPool (2 KB)                                     │  │
 │  │   HX711(64B) | MPU6050(64B) | SSD1306(128B)       │  │
-│  │   Fingerprint(128B)                                │  │
+│  │   Fingerprint(128B) | RTC (stack vars, no pool)    │  │
 │  ├───────────────────────────────────────────────────┤  │
 │  │ domainPool (1 KB)                                  │  │
 │  │   WeightService | MotionService | StateManager     │  │
@@ -247,7 +247,7 @@ ss_setBootStage(mem, BootStage::BS_HX711);
 ss_setBootComplete(mem);
 ```
 
-10 components tracked: Storage, HX711, MPU6050, Display, WiFi, WebServer, Fingerprint, Door, ServerClient, AccessController.
+10 components tracked: Storage, HX711, MPU6050, Display, WiFi, WebServer, Fingerprint, Door, ServerClient, AccessController, RTC (11 total).
 
 Inline wrappers available: `systemStatus_hasErrors()`, `systemStatus_getOverallStatus()`, etc. (auto-resolve `g_registry.getSystemStatus()`).
 

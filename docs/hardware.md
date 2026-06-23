@@ -22,11 +22,14 @@
 | **Door** |
 | 13 | Relay | Output | Solenoid lock, active LOW |
 | 14 | Door Sensor | Input | Reed switch, INPUT_PULLUP, LOW=closed |
+| **RTC** |
+| 18 | RTC SDA | I2C | DS3231 I2C (I2C_NUM_1, separate bus) |
+| 23 | RTC SCL | I2C | DS3231 I2C (I2C_NUM_1, separate bus) |
 | **System** |
 | 33 | Button | Input | BOOT button, INPUT_PULLUP, LOW=pressed |
 | 2 | LED | Output | Built-in blue LED, active LOW |
 
-## I2C Bus
+## I2C Bus 0 (pins 21/22)
 
 - **Frequency**: 400 kHz (fast mode)
 - **Shared bus**: MPU6050 + SSD1306 on same SDA/SCL
@@ -36,6 +39,13 @@
   - SSD1306: 0x3C
 
 Both devices are 3.3V tolerant. No level shifting needed.
+
+## I2C Bus 1 (pins 18/23) — RTC
+
+- **Frequency**: 100 kHz (standard mode, DS3231 max)
+- **Dedicated bus**: DS3231 only — avoids address conflict with MPU6050 (both use 0x68)
+- **Address**: 0x68
+- **Fallback**: if RTC absent at boot → clock set to compile-time (`__DATE__` + `__TIME__`), uptime from there
 
 ## HX711 — Load Cell Amplifier
 
@@ -149,6 +159,31 @@ RX   →   GPIO4 (ESP32 TX)
 - ERROR — error message
 - Notification overlay — 3s temporary banner at bottom
 
+## DS3231 — RTC Module
+
+Precision RTC with temperature-compensated crystal oscillator (±2ppm, ~1 minute/year drift).
+
+**Bus**: I2C_NUM_1 (dedicated, pins 18/23)
+**Address**: 0x68
+**Frequency**: 100 kHz
+
+**Wiring**:
+```
+DS3231    ESP32
+VCC  →   3.3V
+GND  →   GND
+SDA  →   GPIO18
+SCL  →   GPIO23
+```
+
+**Driver**: `rtc_init()` / `rtc_now()` / `rtc_isAvailable()` (free functions, `src/hal/RtcDriver.h`)
+
+**Boot behavior**:
+- `initWithRetry("RTC", ..., 3, 1000)` — 3 retries, 1s backoff
+- On success: reads DS3231 time → `settimeofday()` → all `time(nullptr)` calls return real time
+- On failure: `rtc_setFallbackTime()` sets clock to compile time → uptime ticks from there
+- SystemStatus tracks "RTC" component with OK/ERROR
+
 ## Relay — Solenoid Door Lock
 
 **Pin**: GPIO13
@@ -192,5 +227,6 @@ LED patterns:
 - MPU6050: 3.3V, ~3.9mA
 - SSD1306: 3.3V, ~20mA (all pixels on)
 - R307 fingerprint: 3.3V/5V, ~60mA (during scan)
+- DS3231 RTC: 3.3V, ~0.2mA (timekeeping), ~0.6mA (I2C active)
 - Relay: 5V, ~70mA (coil) — separate 5V supply recommended
 - **Total peak**: ~450mA — 1A 5V supply with 3.3V LDO recommended

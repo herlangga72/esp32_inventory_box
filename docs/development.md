@@ -39,6 +39,7 @@ esp32_inventory_box/
 │   │   ├── MPU6050Driver.h/.cpp
 │   │   ├── SSD1306Driver.h/.cpp
 │   │   ├── FingerprintDriver.h/.cpp
+│   │   ├── RtcDriver.h/.cpp
 │   │   └── InterruptManager.h/.cpp
 │   ├── domain/
 │   │   ├── entities/        # Data structs: Tool, User, LogEntry, BoxState
@@ -289,8 +290,9 @@ Modify `TaskRate::AP_*_MS` or `TaskRate::STA_*_MS` in `Config.h`. No recompile o
 No formal test framework (ESP32 Arduino has no native unit testing). Manual testing approach:
 
 1. **Boot test**: power on, check serial for component status — all should be OK
-2. **Degraded test**: disconnect HX711, boot — verify HX711 shows ERROR, weight task not created
-3. **WiFi test**: boot without creds → should enter AP mode. Connect, set creds via portal → should reboot in STA
-4. **Weight test**: place known weight → verify delta and matching in `/api/status`
-5. **Access test**: enroll fingerprint, scan → verify door unlock and USER_LOGIN event
-6. **API test**: curl each endpoint, verify response schema
+2. **RTC test**: check serial for `RTC: OK`; `/api/diagnostics` shows RTC status. Disconnect RTC → verify fallback message.
+3. **Degraded test**: disconnect HX711, boot — verify HX711 shows ERROR, weight task not created
+4. **WiFi test**: boot without creds → should enter AP mode. Connect, set creds via portal → should reboot in STA
+5. **Weight test**: place known weight → verify delta and matching in `/api/status`
+6. **Access test**: enroll fingerprint, scan → verify door unlock and USER_LOGIN event
+7. **API test**: curl each endpoint, verify response schema
