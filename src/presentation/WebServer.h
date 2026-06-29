@@ -49,6 +49,10 @@ private:
     FingerprintDriver* fpDriver;
     ServerClient* serverClient;
 
+    // WiFi scan cache — avoids flicker between async scan cycles
+    String lastScanJson;
+    uint32_t lastScanMs;
+
     void handleStatus();
     void handleTools();
     void handleToolById();
@@ -66,6 +70,7 @@ private:
     void handleWiFiStatus();
     void handleWiFiConfig();
     void handleUserDelete();
+    void handleUserById();
     void handleWiFiScan();
 
     void handleAccessStatus();
@@ -73,6 +78,8 @@ private:
     void handleFingerprintEnroll();
     void handleFingerprintDelete();
     void handleDoorControl();
+
+    void handleContentsClear();
 
     void sendJson(const String& json);
     void sendError(int code, const char* message);

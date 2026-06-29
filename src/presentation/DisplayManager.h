@@ -5,6 +5,7 @@
 #include "../kernel/ServiceRegistry.h"
 
 class SSD1306Driver;
+class Lcd1602Driver;
 
 enum class Screen : uint8_t {
     STATUS,
@@ -15,6 +16,6 @@ enum class Screen : uint8_t {
 };
 
 void dm_dispatchMessage(DisplayManagerMemory* mem, const ServiceMessage& msg);
-void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled);
+void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled, Lcd1602Driver* lcd);
 
 #endif // DISPLAY_MANAGER_H

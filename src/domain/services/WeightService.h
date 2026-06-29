@@ -12,4 +12,7 @@ float ws_getCurrentWeight(const WeightServiceMemory* mem);
 float ws_getBaseline(const WeightServiceMemory* mem);
 float ws_getDelta(const WeightServiceMemory* mem);
 
+// Returns true if weight readings have been stable (abs(prev - current) < threshold)
+bool ws_isWeightStable(const WeightServiceMemory* mem);
+
 #endif

@@ -21,11 +21,15 @@
 #define PIN_MPU_SCL      22    // D22 available on both
 #define MPU6050_ADDR     0x68
 
-// SSD1306 OLED Display
-#define PIN_DISPLAY_SDA  21    // D21 (shared I2C with MPU6050)
+// SSD1306 OLED Display (I2C)
+#define PIN_DISPLAY_SDA  21    // D21 (shared I2C bus)
 #define PIN_DISPLAY_SCL  22    // D22
-#define PIN_DISPLAY_RST  19    // D19
+#define PIN_DISPLAY_RST  19    // D19 (OLED reset)
 #define DISPLAY_ADDR     0x3C
+
+// LCD 16x2 with PCF8574 I2C Backpack — shares SDA/SCL with MPU6050+SSD1306
+#define LCD1602_ADDR_1   0x27  // Most common backpack address
+#define LCD1602_ADDR_2   0x3F  // Alternate (some PCF8574 modules)
 
 // Button
 #define PIN_BUTTON       33    // D33

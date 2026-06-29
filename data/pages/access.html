@@ -45,8 +45,21 @@
                     <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">Fingerprint ID (1-127)</label>
                     <input type="number" id="enroll-fp-id" min="1" max="127" value="1" style="width:100px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);">
                 </div>
-                <button class="btn btn-primary" id="btn-enroll-start" onclick="accessEnroll()">Start Enrollment</button>
-                <button class="btn" id="btn-enroll-cancel" onclick="accessEnrollCancel()" style="display:none;">Cancel</button>
+                <div>
+                    <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">Link to User</label>
+                    <select id="enroll-user-id" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);">
+                        <option value="-1">No user</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">&nbsp;</label>
+                    <button class="btn" onclick="accessShowAddUser()" style="font-size:11px;padding:4px 10px;">+ New User</button>
+                </div>
+                <div>
+                    <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">&nbsp;</label>
+                    <button class="btn btn-primary" id="btn-enroll-start" onclick="accessEnroll()">Start Enrollment</button>
+                    <button class="btn" id="btn-enroll-cancel" onclick="accessEnrollCancel()" style="display:none;">Cancel</button>
+                </div>
             </div>
 
             <div id="enroll-progress" style="margin-top:12px;display:none;">
@@ -210,15 +223,61 @@ async function accessRefresh() {
 
 // ---- Enrollment ----
 
+async function accessShowAddUser() {
+    showModal('Quick Add User', `
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Create a user first, then enroll their fingerprint.</p>
+        <div class="form-group">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-input" id="aq-name" placeholder="User name">
+        </div>
+        <div class="form-group">
+            <label class="form-label">PIN (4 digits)</label>
+            <input type="password" class="form-input form-input-sm" id="aq-pin" maxlength="4" placeholder="----">
+        </div>
+    `, `
+        <button class="btn" onclick="hideModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="accessQuickAddUser()">Add &amp; Enroll</button>
+    `);
+}
+
+async function accessQuickAddUser() {
+    const name = document.getElementById('aq-name').value.trim();
+    const pin = document.getElementById('aq-pin').value;
+    if (!name || pin.length !== 4) {
+        showToast('Name required, PIN must be 4 digits', 'error');
+        return;
+    }
+    try {
+        const data = await API.post('/users', { name, pin });
+        if (data.success) {
+            // Auto-select the new user in the dropdown
+            await accessLoadUsers();  // reloads dropdown
+            const sel = document.getElementById('enroll-user-id');
+            for (let i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value == data.id) {
+                    sel.selectedIndex = i;
+                    break;
+                }
+            }
+            hideModal();
+            showToast('User "' + name + '" created. Now enroll fingerprint.', 'success');
+        }
+    } catch (err) {
+        showToast('Failed: ' + err.message, 'error');
+    }
+}
+
 async function accessEnroll() {
     const fpId = parseInt(document.getElementById('enroll-fp-id').value);
     if (!fpId || fpId < 1 || fpId > 127) {
         showToast('Enter a valid fingerprint ID (1-127)', 'error');
         return;
     }
+    const userId = parseInt(document.getElementById('enroll-user-id').value);
 
     try {
-        const data = await API.post('/fingerprint/enroll', { fpId });
+        const body = userId > 0 ? { fpId, userId } : { fpId };
+        const data = await API.post('/fingerprint/enroll', body);
 
         if (data.success) {
             document.getElementById('btn-enroll-start').style.display = 'none';
@@ -368,10 +427,23 @@ async function accessUnlock() {
 
 // ---- User Mapping ----
 
+function accessPopulateUserSelect(users) {
+    const sel = document.getElementById('enroll-user-id');
+    sel.innerHTML = '<option value="-1">No user</option>';
+    users.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.id;
+        opt.textContent = u.name + (u.fpId > 0 ? ' (FP #' + u.fpId + ')' : '');
+        sel.appendChild(opt);
+    });
+}
+
 async function accessLoadUsers() {
     try {
         const data = await API.get('/users');
         const el = document.getElementById('access-user-mapping');
+
+        accessPopulateUserSelect(data.users || []);
 
         if (!data.users || data.users.length === 0) {
             el.innerHTML = '<div class="table-empty">No users configured</div>';
@@ -395,15 +467,15 @@ async function accessLoadUsers() {
                             <td>
                                 <span class="badge badge-${u.active ? 'success' : 'danger'}">${u.active ? 'Active' : 'Inactive'}</span>
                             </td>
-                            <td>
+                            <td id="access-fp-cell-${u.id}">
                                 ${u.fpId > 0
                                     ? '<span style="color:var(--success);">#' + u.fpId + '</span>'
                                     : '<span style="color:var(--text-muted);">Not assigned</span>'}
                             </td>
                             <td>
-                                <button class="btn" onclick="accessDeleteFingerprint(${u.fpId})" ${u.fpId <= 0 ? 'disabled' : ''} style="font-size:11px;padding:2px 8px;">
-                                    ${u.fpId > 0 ? 'Delete FP #' + u.fpId : '--'}
-                                </button>
+                                ${u.fpId > 0
+                                    ? `<button class="btn" onclick="accessDeleteFingerprint(${u.fpId}, ${u.id})" style="font-size:11px;padding:2px 8px;">Delete FP #${u.fpId}</button>`
+                                    : `<button class="btn" onclick="accessShowAssignFp(${u.id})" style="font-size:11px;padding:2px 8px;">Assign FP</button>`}
                             </td>
                         </tr>
                     `).join('')}
@@ -411,6 +483,38 @@ async function accessLoadUsers() {
             </table>`;
     } catch (err) {
         console.error('Load users failed:', err);
+    }
+}
+
+async function accessShowAssignFp(userId) {
+    const fpId = prompt('Enter fingerprint ID (1-127) to assign:');
+    if (!fpId) return;
+    const num = parseInt(fpId);
+    if (num < 1 || num > 127) { showToast('FP ID must be 1-127', 'error'); return; }
+    try {
+        await API.put('/users/' + userId, { fpId: num });
+        showToast('FP #' + num + ' assigned to user', 'success');
+        accessLoadUsers();
+    } catch (err) {
+        showToast('Failed: ' + err.message, 'error');
+    }
+}
+
+async function accessDeleteFingerprint(fpId, userId) {
+    if (!fpId || fpId <= 0) return;
+    if (!confirm('Delete fingerprint #' + fpId + ' from sensor and unlink from user?')) return;
+
+    try {
+        await API.post('/fingerprint/delete', { fpId });
+        // Also unlink from user if userId given
+        if (userId > 0) {
+            await API.put('/users/' + userId, { fpId: -1 });
+        }
+        showToast('Fingerprint #' + fpId + ' deleted', 'success');
+        accessLoadUsers();
+        accessRefresh();
+    } catch (err) {
+        showToast('Delete failed: ' + err.message, 'error');
     }
 }
 

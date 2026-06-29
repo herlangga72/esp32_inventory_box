@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include <WiFi.h>
 #ifndef RELEASE_BUILD
 #include <ArduinoOTA.h>
@@ -16,6 +17,7 @@
 #include "hal/HX711Driver.h"
 #include "hal/MPU6050Driver.h"
 #include "hal/SSD1306Driver.h"
+#include "hal/Lcd1602Driver.h"
 #include "hal/InterruptManager.h"
 #include "hal/RtcDriver.h"
 #include "hal/FingerprintDriver.h"
@@ -59,6 +61,7 @@ TaskHandle_t accessTaskHandle = NULL;
 HX711Driver hx711(PIN_HX711_DT, PIN_HX711_SCK, PIN_HX711_DRDY);
 MPU6050Driver mpu;
 SSD1306Driver display(PIN_DISPLAY_SDA, PIN_DISPLAY_SCL, PIN_DISPLAY_RST);
+Lcd1602Driver lcdDisplay;
 
 // Storage (NVS wrapper) — lives on stack, heap-allocates Preferences internally (unavoidable)
 StorageManager storage;
@@ -121,6 +124,12 @@ bool initWithRetry(const char* name, F initFn,
     return false;
 }
 
+// ---- I2C address probe (no library needed — uses Wire) ----
+static bool i2cProbe(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
+
 // ---- Dual-core boot worker (Core 0) ----
 // Runs I2C sensors then Fingerprint in parallel with Core 1's init.
 static void bootCore0Worker(void* arg) {
@@ -130,11 +139,34 @@ static void bootCore0Worker(void* arg) {
     initWithRetry("MPU6050", [](){ return mpu.begin(); },
         "I2C address 0x68 not found - check wiring", 3, 200);
 
-    initWithRetry("Display", [](){
-        display.init();
-        delay(50);
-        return display.isInitialized();
-    }, "I2C address 0x3C not found - check wiring", 2, 300);
+    // Auto-detect display: probe LCD (0x27, 0x3F) then SSD1306 (0x3C)
+    {
+        auto* dm = g_registry.getDisplayManager();
+        bool hasLCD = i2cProbe(LCD1602_ADDR_1) || i2cProbe(LCD1602_ADDR_2);
+        bool hasOLED = i2cProbe(DISPLAY_ADDR);
+
+        if (hasLCD) {
+            LOG_INFO("INIT", "LCD 16x2 detected on I2C");
+            initWithRetry("Display", [](){
+                uint8_t addr = i2cProbe(LCD1602_ADDR_1) ? LCD1602_ADDR_1 : LCD1602_ADDR_2;
+                return lcdDisplay.init(addr);
+            }, "LCD not responding on 0x27 or 0x3F", 2, 300);
+            dm->displayType = static_cast<uint8_t>(DisplayType::LCD1602);
+        } else if (hasOLED) {
+            LOG_INFO("INIT", "SSD1306 OLED detected on I2C");
+            initWithRetry("Display", [](){
+                display.init();
+                delay(50);
+                return display.isInitialized();
+            }, "I2C address 0x3C not found - check wiring", 2, 300);
+            dm->displayType = static_cast<uint8_t>(DisplayType::SSD1306);
+        } else {
+            LOG_ERROR("INIT", "No display detected on I2C bus");
+            ss_markError(g_registry.getSystemStatus(), "Display",
+                "No I2C display found — check wiring");
+            dm->displayType = static_cast<uint8_t>(DisplayType::SSD1306);
+        }
+    }
 
     xEventGroupSetBits(sync, BOOT_I2C_DONE);
 
@@ -293,7 +325,7 @@ void displayTask(void* param) {
             dm_dispatchMessage(mem, msg);
         }
 
-        dm_update(mem, &display);
+        dm_update(mem, &display, &lcdDisplay);
 
         TickType_t delayTicks = opDelay(TaskRate::AP_DISPLAY_MS, TaskRate::STA_DISPLAY_MS);
         vTaskDelay(delayTicks);
@@ -553,9 +585,12 @@ void setup() {
     // ---- DISPLAY MANAGER ----
     if (ss_getStatus(ss, "Display") != ComponentStatus::ERROR) {
         auto* dm = g_registry.getDisplayManager();
-        dm->healthy = display.isInitialized();
+        bool isLCD = (dm->displayType == static_cast<uint8_t>(DisplayType::LCD1602));
+        dm->healthy = isLCD ? lcdDisplay.isInitialized() : display.isInitialized();
         dm->awake = true;
-        LOG_INFO("INIT", "DisplayManager heap=%d", ESP.getFreeHeap());
+        dm->currentScreen = 0;
+        LOG_INFO("INIT", "DisplayManager: %s heap=%d",
+                 isLCD ? "LCD 16x2" : "SSD1306", ESP.getFreeHeap());
     } else {
         LOG_INFO("INIT", "DisplayManager: SKIPPED (display offline)");
     }

@@ -321,8 +321,10 @@ struct StateManagerMemory {
     int32_t  currentUserId;
     uint32_t sessionStartMs;
     uint8_t  state;
-    uint8_t  reserved[3];
+    bool     prevDoorOpen;   // for open→closed edge detection in sm_updatePeriodic
+    uint8_t  reserved[2];
     uint32_t stateStartMs;
+    uint32_t doorClosePendingMs;  // millis() when door close detected, 0 = no pending
     int32_t  matchResults[MAX_BOX_CONTENTS];
     uint8_t  matchCount;
     uint8_t  reserved2[3];
@@ -406,11 +408,13 @@ struct WebServerMemory {
     char     apiBuffer[256];
 };
 
+enum class DisplayType : uint8_t { SSD1306 = 0, LCD1602 = 1 };
+
 struct DisplayManagerMemory {
     uint8_t  currentScreen;
     bool     healthy;
     bool     awake;
-    uint8_t  reserved1;
+    uint8_t  displayType;    // DisplayType enum — set during auto-detect boot
     uint32_t lastRefreshMs;
     uint32_t lastHealthCheckMs;
     char     notificationText[32];
@@ -420,8 +424,10 @@ struct DisplayManagerMemory {
     float    displayDelta;
     int32_t  displayContentCount;
     char     displayUser[32];
+    bool     doorOpen;       // read from DoorService state each LCD cycle
+    uint8_t  pad[3];
 };
-static_assert(sizeof(DisplayManagerMemory) <= 112, "DisplayManagerMemory too large");
+static_assert(sizeof(DisplayManagerMemory) <= 120, "DisplayManagerMemory too large");
 
 struct SerialCLIMemory {
     char     buffer[128];
@@ -451,6 +457,7 @@ struct ServerClientMemory {
 #define HX711_POOL_SIZE        64
 #define MPU6050_POOL_SIZE      64
 #define SSD1306_POOL_SIZE      128
+#define LCD1602_POOL_SIZE      64
 #define FINGERPRINT_POOL_SIZE  256
 
 // ======================================================================
@@ -580,7 +587,8 @@ static_assert(SR_POOL_KERNEL_SIZE >=
     "Kernel pool too small");
 
 static_assert(SR_POOL_HAL_SIZE >=
-    HX711_POOL_SIZE + MPU6050_POOL_SIZE + SSD1306_POOL_SIZE + FINGERPRINT_POOL_SIZE,
+    HX711_POOL_SIZE + MPU6050_POOL_SIZE + SSD1306_POOL_SIZE +
+    LCD1602_POOL_SIZE + FINGERPRINT_POOL_SIZE,
     "HAL pool too small");
 
 static_assert(SR_POOL_DOMAIN_SIZE >=

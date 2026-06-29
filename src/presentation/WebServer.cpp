@@ -30,7 +30,7 @@ extern StorageManager storage;
 // ---- Request structs ----
 
 struct CreateToolReq  { char name[32]; float weight; float tolerance; };
-struct CreateUserReq  { char name[32]; char pin[8]; };
+struct CreateUserReq  { char name[32]; char pin[8]; int fpId; };
 struct LoginReq       { char pin[8]; };
 struct WifiConfigReq  { char ssid[33]; char pass[65]; };
 
@@ -65,6 +65,8 @@ void WebServerManager::begin() {
     server.on("/api/users", HTTP_POST, [this]() { handleUsers(); });
     server.on("/api/users/login", HTTP_POST, [this]() { handleUserLogin(); });
     server.on("/api/users/logout", HTTP_POST, [this]() { handleUserLogout(); });
+    server.on("/api/users/*", HTTP_GET, [this]() { handleUserById(); });
+    server.on("/api/users/*", HTTP_PUT, [this]() { handleUserById(); });
     server.on("/api/users/*", HTTP_DELETE, [this]() { handleUserDelete(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
     server.on("/api/logs/download", HTTP_GET, [this]() { handleLogsDownload(); });
@@ -77,6 +79,9 @@ void WebServerManager::begin() {
     server.on("/api/diagnostics", HTTP_GET, [this]() { handleDiagnostics(); });
     server.on("/api/restart", HTTP_POST, [this]() { handleRestart(); });
     server.on("/scan", HTTP_GET, [this]() { handleWiFiScan(); });
+
+    // Contents management
+    server.on("/api/contents/clear", HTTP_POST, [this]() { handleContentsClear(); });
 
     // Access control routes
     server.on("/api/access/status", HTTP_GET, [this]() { handleAccessStatus(); });
@@ -325,18 +330,21 @@ void WebServerManager::handleUsers() {
 
     } else if (server.method() == HTTP_POST) {
         CreateUserReq req; memset(&req, 0, sizeof(req));
+        req.fpId = -1;
         JField fields[] = {
             {"name", JField::T_STR, req.name, sizeof(req.name)},
             {"pin",  JField::T_STR, req.pin,  sizeof(req.pin)},
+            {"fpId", JField::T_INT, &req.fpId},
         };
         String err;
-        if (!jsonParse(server.arg("plain").c_str(), fields, 2, err)) {
+        if (!jsonParse(server.arg("plain").c_str(), fields, 3, err)) {
             sendError(400, "Invalid JSON"); return;
         }
 
         User user;
         if (req.name[0]) user.setName(req.name);
         if (req.pin[0]) user.setPin(req.pin);
+        if (req.fpId >= 0) user.fpId = req.fpId;
 
         if (userRepo) {
             int id = ur_create(RUSERS, &storage, &user);
@@ -384,6 +392,58 @@ void WebServerManager::handleUserLogin() {
 void WebServerManager::handleUserLogout() {
     g_registry.sendCmd(ServiceId::STATE_MANAGER, (uint8_t)StateMsgType::USER_LOGOUT);
     sendJson("{\"success\":true}");
+}
+
+void WebServerManager::handleUserById() {
+    int id = server.uri().substring(server.uri().lastIndexOf('/') + 1).toInt();
+    if (id <= 0) { sendError(400, "Invalid user ID"); return; }
+
+    if (server.method() == HTTP_GET) {
+        User* user = ur_findById(RUSERS, &storage, id);
+        if (!user) { sendError(404, "User not found"); return; }
+
+        JsonBuilder jb;
+        jb.startObj();
+        jb.addInt("id", user->id);
+        jb.addStr("name", user->name);
+        jb.addStr("pin", user->pin);
+        jb.addBool("active", user->active);
+        jb.addInt("fpId", user->fpId);
+        jb.addInt("usageSec", (int)user->totalUsageSeconds);
+        jb.addInt("sessions", user->sessionCount);
+        jb.addInt("placements", user->toolPlacements);
+        jb.addInt("removals", user->toolRemovals);
+        jb.endObj();
+        sendJson(jb.str());
+        return;
+    }
+
+    // PUT: update user fields
+    struct { char name[32]; char pin[8]; int fpId; bool hasFpId; } req;
+    memset(&req, 0, sizeof(req));
+    req.fpId = -1;
+    JField fields[] = {
+        {"name", JField::T_STR, req.name, sizeof(req.name)},
+        {"pin",  JField::T_STR, req.pin,  sizeof(req.pin)},
+        {"fpId", JField::T_INT, &req.fpId},
+    };
+    String err;
+    if (!jsonParse(server.arg("plain").c_str(), fields, 3, err)) {
+        sendError(400, "Invalid JSON"); return;
+    }
+
+    User* user = ur_findById(RUSERS, &storage, id);
+    if (!user) { sendError(404, "User not found"); return; }
+
+    if (req.name[0]) user->setName(req.name);
+    if (req.pin[0]) user->setPin(req.pin);
+    if (req.fpId >= 0) user->fpId = req.fpId;
+
+    if (ur_update(RUSERS, &storage, id, user)) {
+        sendJson("{\"success\":true}");
+    } else {
+        sendError(500, "Update failed");
+    }
 }
 
 void WebServerManager::handleUserDelete() {
@@ -442,6 +502,13 @@ void WebServerManager::handleLogsClear() {
     } else {
         sendError(500, "Log repository not available");
     }
+}
+
+// ---- Contents ----
+
+void WebServerManager::handleContentsClear() {
+    sm_clearContents(RSTATE);
+    sendJson("{\"success\":true}");
 }
 
 // ---- Calibrate ----
@@ -623,15 +690,26 @@ void WebServerManager::handleWiFiScan() {
 
     if (n == WIFI_SCAN_FAILED) {
         WiFi.scanNetworks(true);
-        sendJson("{\"networks\":[]}");
+        // Serve cached results while new scan runs
+        if (lastScanJson.length() > 0) {
+            sendJson(lastScanJson);
+        } else {
+            sendJson("{\"networks\":[]}");
+        }
         return;
     }
 
     if (n == WIFI_SCAN_RUNNING) {
-        sendJson("{\"networks\":[]}");
+        // Serve cached results while scan is in progress
+        if (lastScanJson.length() > 0) {
+            sendJson(lastScanJson);
+        } else {
+            sendJson("{\"networks\":[]}");
+        }
         return;
     }
 
+    // Scan complete — build JSON, cache it, start next scan
     JsonBuilder jb;
     jb.startObj();
     jb.startArr("networks");
@@ -646,8 +724,13 @@ void WebServerManager::handleWiFiScan() {
     jb.endArr();
     jb.endObj();
 
+    lastScanJson = jb.str();
+    lastScanMs = millis();
     WiFi.scanDelete();
-    sendJson(jb.str());
+    // Kick off next scan immediately so cache is fresh
+    WiFi.scanNetworks(true);
+
+    sendJson(lastScanJson);
 }
 
 // ---- Access Control ----
@@ -769,22 +852,34 @@ void WebServerManager::handleFingerprintEnroll() {
     }
 
     // POST: start enrollment
-    struct { int fpId; } req;
+    struct { int fpId; int userId; } req;
     memset(&req, 0, sizeof(req));
+    req.userId = -1;
     JField fields[] = {
-        {"fpId", JField::T_INT, &req.fpId},
+        {"fpId",   JField::T_INT, &req.fpId},
+        {"userId", JField::T_INT, &req.userId},
     };
     String err;
-    if (!jsonParse(server.arg("plain").c_str(), fields, 1, err) || req.fpId <= 0) {
+    if (!jsonParse(server.arg("plain").c_str(), fields, 2, err) || req.fpId <= 0) {
         sendError(400, "fpId required (1-127)");
         return;
     }
 
-    if ( ac_beginEnrollment(RACCESS, fpDriver, req.fpId)) {
+    // Auto-link fpId to user if userId provided
+    if (req.userId > 0) {
+        User* u = ur_findById(RUSERS, &storage, req.userId);
+        if (u) {
+            u->fpId = req.fpId;
+            ur_update(RUSERS, &storage, req.userId, u);
+        }
+    }
+
+    if (ac_beginEnrollment(RACCESS, fpDriver, req.fpId)) {
         JsonBuilder jb;
         jb.startObj();
         jb.addBool("success", true);
         jb.addInt("fpId", req.fpId);
+        jb.addInt("userId", req.userId);
         jb.addStr("message", "Enrollment started. Place finger on sensor.");
         jb.endObj();
         sendJson(jb.str());

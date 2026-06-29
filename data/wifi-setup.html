@@ -46,16 +46,81 @@
     </div>
     <script>
         let selectedSSID = '';
+        const known = {}; // ssid -> {el, rssi}
+
+        function makeItem(n) {
+            const div = document.createElement('div');
+            div.className = 'network-item';
+            div.onclick = function() { selectNetwork(n.ssid, div); };
+            div.innerHTML = `<div class="network-name">${esc(n.ssid)}</div><div class="network-rssi">Signal: ${n.rssi} dBm</div>`;
+            return div;
+        }
+
+        function esc(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
         async function scanNetworks() {
             try {
                 const res = await fetch('/scan');
                 const data = await res.json();
                 const container = document.getElementById('networks');
-                if (data.networks.length === 0) { container.innerHTML = '<div class="loading">No networks found, click to rescan</div>'; return; }
-                container.innerHTML = data.networks.map(n => `<div class="network-item" onclick="selectNetwork('${n.ssid}')"><div class="network-name">${n.ssid}</div><div class="network-rssi">Signal: ${n.rssi} dBm</div></div>`).join('');
-            } catch (err) { document.getElementById('networks').innerHTML = '<div class="loading">Scan failed, try again</div>'; }
+
+                // Remove loading placeholder if present
+                const placeholder = container.querySelector('.loading');
+                if (placeholder) container.innerHTML = '';
+
+                if (data.networks.length === 0) {
+                    if (Object.keys(known).length === 0) {
+                        container.innerHTML = '<div class="loading">No networks found, scanning...</div>';
+                    }
+                    return;
+                }
+
+                const seen = {};
+                const frag = document.createDocumentFragment();
+
+                for (const n of data.networks) {
+                    seen[n.ssid] = true;
+                    if (known[n.ssid]) {
+                        // Update RSSI on existing item
+                        known[n.ssid].el.querySelector('.network-rssi').textContent = 'Signal: ' + n.rssi + ' dBm';
+                        known[n.ssid].rssi = n.rssi;
+                    } else {
+                        // New network — create element
+                        const el = makeItem(n);
+                        known[n.ssid] = { el: el, rssi: n.rssi };
+                        if (n.ssid === selectedSSID) el.classList.add('selected');
+                        frag.appendChild(el);
+                    }
+                }
+
+                // Append new items to container
+                if (frag.childNodes.length > 0) {
+                    container.appendChild(frag);
+                }
+
+                // Remove networks that disappeared
+                for (const ssid of Object.keys(known)) {
+                    if (!seen[ssid]) {
+                        known[ssid].el.remove();
+                        delete known[ssid];
+                        if (ssid === selectedSSID) selectedSSID = '';
+                    }
+                }
+            } catch (err) {
+                if (Object.keys(known).length === 0) {
+                    document.getElementById('networks').innerHTML = '<div class="loading">Scan failed, try again</div>';
+                }
+            }
         }
-        function selectNetwork(ssid) { selectedSSID = ssid; document.querySelectorAll('.network-item').forEach(el => el.classList.remove('selected')); event.target.closest('.network-item').classList.add('selected'); }
+
+        function selectNetwork(ssid, el) {
+            selectedSSID = ssid;
+            document.querySelectorAll('.network-item').forEach(e => e.classList.remove('selected'));
+            el.classList.add('selected');
+        }
+
         async function saveConfig() {
             const password = document.getElementById('password').value;
             if (!selectedSSID) { showMessage('Please select a network', 'error'); return; }
@@ -68,6 +133,7 @@
                 else { showMessage(data.error || 'Connection failed', 'error'); document.getElementById('saveBtn').disabled = false; document.getElementById('saveBtn').textContent = 'Connect'; }
             } catch (err) { showMessage('Error saving configuration', 'error'); document.getElementById('saveBtn').disabled = false; document.getElementById('saveBtn').textContent = 'Connect'; }
         }
+
         function showMessage(text, type) { document.getElementById('message').innerHTML = `<div class="message ${type}">${text}</div>`; }
         scanNetworks();
         setInterval(scanNetworks, 5000);

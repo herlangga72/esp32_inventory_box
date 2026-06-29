@@ -1,9 +1,16 @@
 #include "DisplayManager.h"
 #include "../domain/events/EventBus.h"
+#include "../domain/services/DoorService.h"
+#include "../domain/services/StateManager.h"
 #include "../hal/SSD1306Driver.h"
+#include "../hal/Lcd1602Driver.h"
 #include "../utils/LogManager.h"
+#include "../data/ToolRepository.h"
+#include "../data/StorageManager.h"
 #include <WiFi.h>
 #include <cstring>
+
+extern StorageManager storage;
 
 // ---- Screen constants (match Screen enum) ----
 enum : uint8_t { DM_STATUS, DM_EVENT_LOG, DM_SETTINGS, DM_CALIBRATION, DM_ERROR };
@@ -128,7 +135,112 @@ static void dm_drawErrorScreen(SSD1306Driver* oled, const DisplayManagerMemory* 
 }
 
 // ======================================================================
-// MESSAGE DISPATCH
+// LCD 16x2 SCREEN DRAWING — 2 rows × 16 chars
+// ======================================================================
+
+static void dm_lcdPadRight(char* buf, size_t len) {
+    // pad with spaces to clear leftover chars from previous write
+    size_t pos = strlen(buf);
+    while (pos < len) buf[pos++] = ' ';
+    buf[len] = '\0';
+}
+
+static void dm_lcdDrawStatus(Lcd1602Driver* lcd, const DisplayManagerMemory* mem) {
+    lcd->clear();
+
+    // Row 0: "DOOR:OPEN W:450g" or "DOOR:CLSD W:450g"
+    char row0[17];
+    snprintf(row0, sizeof(row0), "DOOR:%s W:%.0fg",
+             mem->doorOpen ? "OPEN" : "CLSD",
+             mem->displayWeight);
+    dm_lcdPadRight(row0, 16);
+    lcd->setCursor(0, 0);
+    lcd->print(row0);
+
+    // Row 1: "U:username      "
+    char row1[17];
+    snprintf(row1, sizeof(row1), "U:%s",
+             strlen(mem->displayUser) > 0 ? mem->displayUser : "None");
+    dm_lcdPadRight(row1, 16);
+    lcd->setCursor(0, 1);
+    lcd->print(row1);
+}
+
+static void dm_lcdDrawContents(Lcd1602Driver* lcd, const DisplayManagerMemory* mem) {
+    (void)mem;
+    lcd->clear();
+
+    // Read contents directly from StateManagerMemory
+    StateManagerMemory* sm = g_registry.getStateManager();
+    int count = sm_getContentCount(sm);
+    const int32_t* ids = sm_getContents(sm);
+
+    if (count == 0) {
+        char row0[17];
+        snprintf(row0, sizeof(row0), "Box empty       ");
+        lcd->setCursor(0, 0);
+        lcd->print(row0);
+        lcd->setCursor(0, 1);
+        lcd->print("                ");
+        return;
+    }
+
+    // Look up tool names from repo cache
+    ToolRepositoryMemory* tr = g_registry.getToolRepository();
+    char name0[16] = "?";
+    char name1[16] = "?";
+
+    Tool* t = tr_findById(tr, &storage, ids[0]);
+    if (t) snprintf(name0, sizeof(name0), "%s", t->name);
+
+    if (count >= 2) {
+        t = tr_findById(tr, &storage, ids[1]);
+        if (t) snprintf(name1, sizeof(name1), "%s", t->name);
+    }
+
+    // Row 0: "1.Wrench        "
+    char row0[17];
+    snprintf(row0, sizeof(row0), "1.%.14s", name0);
+    dm_lcdPadRight(row0, 16);
+    lcd->setCursor(0, 0);
+    lcd->print(row0);
+
+    // Row 1: "2.Screwdriver   " or "+2 more       "
+    char row1[17];
+    if (count > 2) {
+        snprintf(row1, sizeof(row1), "+%d more       ", count - 1);
+    } else {
+        snprintf(row1, sizeof(row1), "2.%.14s", name1);
+    }
+    dm_lcdPadRight(row1, 16);
+    lcd->setCursor(0, 1);
+    lcd->print(row1);
+}
+
+static void dm_lcdDrawInfo(Lcd1602Driver* lcd, const DisplayManagerMemory* mem) {
+    lcd->clear();
+
+    // Row 0: "B:1000 D:+23    "
+    char row0[17];
+    snprintf(row0, sizeof(row0), "B:%.0f D:%+.0f",
+             mem->displayBaseline, mem->displayDelta);
+    dm_lcdPadRight(row0, 16);
+    lcd->setCursor(0, 0);
+    lcd->print(row0);
+
+    // Row 1: "WiFi:-45dBm STA "
+    char row1[17];
+    if (WiFi.isConnected()) {
+        snprintf(row1, sizeof(row1), "WiFi:%ddBm STA",
+                 static_cast<int>(WiFi.RSSI()));
+    } else {
+        snprintf(row1, sizeof(row1), "WiFi:OFFLINE    ");
+    }
+    dm_lcdPadRight(row1, 16);
+    lcd->setCursor(0, 1);
+    lcd->print(row1);
+}
+
 // ======================================================================
 
 void dm_dispatchMessage(DisplayManagerMemory* mem, const ServiceMessage& msg) {
@@ -191,15 +303,17 @@ void dm_dispatchMessage(DisplayManagerMemory* mem, const ServiceMessage& msg) {
 // PERIODIC UPDATE — 1Hz refresh, health check, draw
 // ======================================================================
 
-void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled) {
+void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled, Lcd1602Driver* lcd) {
     // Drain mailbox
     ServiceMessage mbMsg;
     while (g_registry.tryReceive(ServiceId::DISPLAY_MANAGER, mbMsg)) {
         dm_dispatchMessage(mem, mbMsg);
     }
 
-    // ---- Health check every 5s ----
-    if (millis() - mem->lastHealthCheckMs > 5000) {
+    bool isLCD = (mem->displayType == static_cast<uint8_t>(DisplayType::LCD1602));
+
+    // ---- Health check every 5s (OLED only — LCD has no ping) ----
+    if (!isLCD && millis() - mem->lastHealthCheckMs > 5000) {
         mem->lastHealthCheckMs = millis();
 
         if (oled->ping()) {
@@ -216,25 +330,59 @@ void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled) {
         }
     }
 
-    // ---- 1Hz refresh rate limit ----
-    if (millis() - mem->lastRefreshMs < 1000) return;
+    // ---- Refresh rate: 1Hz OLED, 2Hz LCD ----
+    unsigned int interval = isLCD ? 500 : 1000;
+    if (millis() - mem->lastRefreshMs < interval) return;
 
-    // ---- Apply pending sleep/wake state ----
+    if (isLCD) {
+        // ---- LCD path ----
+        if (!lcd || !lcd->isInitialized()) {
+            mem->healthy = false;
+            return;
+        }
+        mem->healthy = true;
+
+        // Auto-cycle screens every 5s (3 screens: status / contents / info)
+        static uint32_t lastScreenSwitch = 0;
+        if (millis() - lastScreenSwitch > 5000) {
+            mem->currentScreen = (mem->currentScreen + 1) % 3;
+            lastScreenSwitch = millis();
+        }
+
+        // Read door state from DoorServiceMemory in registry
+        mem->doorOpen = ds_isDoorOpen(g_registry.getDoorService());
+
+        switch (mem->currentScreen) {
+            case 0:
+                dm_lcdDrawStatus(lcd, mem);
+                break;
+            case 1:
+                dm_lcdDrawContents(lcd, mem);
+                break;
+            case 2:
+            default:
+                dm_lcdDrawInfo(lcd, mem);
+                break;
+        }
+        mem->lastRefreshMs = millis();
+        return;
+    }
+
+    // ---- OLED path ----
+    // Apply pending sleep/wake state
     if (!mem->awake) {
         oled->sleep();
         mem->lastRefreshMs = millis();
         return;
     }
 
-    // Wake OLED if needed
     if (!oled->isAwake()) {
         oled->wake();
     }
 
-    // Skip drawing if OLED is unhealthy
     if (!mem->healthy) return;
 
-    // ---- One-time EventBus subscription for backward compat ----
+    // One-time EventBus subscription for backward compat
     static bool subscribed = false;
     if (!subscribed) {
         EventBus::getInstance()->subscribe(DomainEvent::WEIGHT_UPDATED,
@@ -264,7 +412,7 @@ void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled) {
         LOG_INFO("DISP", "EventBus subscriptions registered");
     }
 
-    // ---- Draw current screen ----
+    // Draw current screen
     switch (mem->currentScreen) {
         case DM_STATUS:
             dm_drawStatusScreen(oled, mem);
@@ -286,7 +434,6 @@ void dm_update(DisplayManagerMemory* mem, SSD1306Driver* oled) {
             break;
     }
 
-    // ---- Draw notification overlay if active ----
     if (millis() < mem->notificationEndMs) {
         dm_drawNotification(oled, mem);
     }

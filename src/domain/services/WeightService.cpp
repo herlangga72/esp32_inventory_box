@@ -117,3 +117,7 @@ float ws_getBaseline(const WeightServiceMemory* mem) {
 float ws_getDelta(const WeightServiceMemory* mem) {
     return mem->currentWeight - mem->baseline;
 }
+
+bool ws_isWeightStable(const WeightServiceMemory* mem) {
+    return abs(mem->currentWeight - mem->previousWeight) < Config::WEIGHT_THRESHOLD_GRAMS;
+}

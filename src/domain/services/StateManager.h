@@ -24,4 +24,7 @@ float           sm_getBaseline(const StateManagerMemory* mem);
 const int32_t*  sm_getContents(const StateManagerMemory* mem);
 int             sm_getContentCount(const StateManagerMemory* mem);
 
+// --- Manual contents management (for recalibration / API) ---
+void sm_clearContents(StateManagerMemory* mem);
+
 #endif // STATE_MANAGER_H

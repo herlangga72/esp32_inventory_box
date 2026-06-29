@@ -147,11 +147,8 @@ static void ac_handleScanning(AccessControllerMemory* mem, FingerprintDriver* fp
 
         ac_publishEvent(DomainEvent::FINGERPRINT_SCAN, result, 0, "", "");
 
-        if (sc && sc->isConfigured()) {
-            ac_transition(mem, AC_CHECKING_SERVER);
-        } else {
-            ac_transition(mem, AC_LOCAL_AUTH_CHECK);
-        }
+        // Local auth FIRST, then optional server check
+        ac_transition(mem, AC_LOCAL_AUTH_CHECK);
     }
     // -1 = no finger, -2 = no match → stay scanning (don't spam)
 }
@@ -215,32 +212,32 @@ static void ac_handleServerCheck(AccessControllerMemory* mem, ServerClient* sc) 
 static void ac_handleLocalAuthCheck(AccessControllerMemory* mem) {
     UserRepositoryMemory* urMem = g_registry.getUserRepository();
     if (!urMem) {
-        ac_logAccess(mem, "denied", mem->lastFpId, 0, "", "no user repo");
-        ac_transition(mem, AC_DENIED);
+        // No local user repo — try server
+        ServerClient* sc = nullptr;  // Handled below via state check
+        ac_transition(mem, AC_CHECKING_SERVER);
         return;
     }
 
     User* user = ur_findByFingerprintId(urMem, &storage, mem->lastFpId);
 
     if (user && user->active) {
+        // Local match — GRANTED immediately
         snprintf(mem->currentUnlockUserName, sizeof(mem->currentUnlockUserName),
                  "%s", user->name);
         mem->currentUnlockFpId   = mem->lastFpId;
         mem->currentUnlockUserId = user->id;
 
-        LOG_INFO("ACCESS", "LOCAL_FALLBACK fpId=%d userId=%d name=%s",
+        LOG_INFO("ACCESS", "LOCAL_GRANTED fpId=%d userId=%d name=%s",
                  mem->lastFpId, user->id, user->name);
-        ac_logAccess(mem, "local_fallback", mem->lastFpId, user->id, user->name,
-                     "server unreachable");
-        ac_publishEvent(DomainEvent::ACCESS_LOCAL_FALLBACK, mem->lastFpId, user->id,
-                        user->name, "local fallback");
+        ac_logAccess(mem, "granted", mem->lastFpId, user->id, user->name, "local auth");
+        ac_publishEvent(DomainEvent::ACCESS_GRANTED, mem->lastFpId, user->id,
+                        user->name, "local auth");
         ac_transition(mem, AC_GRANTED);
 
     } else {
-        LOG_INFO("ACCESS", "DENIED_LOCAL fpId=%d no matching user", mem->lastFpId);
-        ac_logAccess(mem, "denied", mem->lastFpId, 0, "", "no matching local user");
-        ac_publishEvent(DomainEvent::ACCESS_DENIED, mem->lastFpId, 0, "", "no matching user");
-        ac_transition(mem, AC_DENIED);
+        // No local match — try server fallback
+        LOG_INFO("ACCESS", "LOCAL_NO_MATCH fpId=%d — checking server", mem->lastFpId);
+        ac_transition(mem, AC_CHECKING_SERVER);
     }
 }
 

@@ -28,9 +28,9 @@
                 <tr>
                     <th style="width:60px;">ID</th>
                     <th>Name</th>
-                    <th style="width:100px;">PIN</th>
+                    <th style="width:80px;">FP ID</th>
                     <th style="width:80px;">Status</th>
-                    <th style="width:100px;">Actions</th>
+                    <th style="width:150px;">Actions</th>
                 </tr>
             </thead>
             <tbody id="users-table">
@@ -59,9 +59,10 @@ async function loadUsers() {
             <tr>
                 <td>${user.id}</td>
                 <td>${user.name}</td>
-                <td>••••</td>
+                <td>${user.fpId > 0 ? '<span style="color:var(--success);">#' + user.fpId + '</span>' : '<span style="color:var(--text-muted);">--</span>'}</td>
                 <td><span class="badge ${user.active ? 'badge-success' : 'badge-muted'}">${user.active ? 'Active' : 'Inactive'}</span></td>
                 <td>
+                    <button class="btn btn-sm" onclick="editUser(${user.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})">Delete</button>
                 </td>
             </tr>
@@ -104,6 +105,10 @@ function showAddUserModal() {
             <label class="form-label">PIN (4 digits)</label>
             <input type="password" class="form-input form-input-sm" id="user-pin" maxlength="4" placeholder="----">
         </div>
+        <div class="form-group">
+            <label class="form-label">Fingerprint ID (optional)</label>
+            <input type="number" class="form-input form-input-sm" id="user-fpid" min="1" max="127" placeholder="Leave empty to skip">
+        </div>
     `, `
         <button class="btn" onclick="hideModal()">Cancel</button>
         <button class="btn btn-primary" onclick="createUser()">Add User</button>
@@ -113,14 +118,17 @@ function showAddUserModal() {
 async function createUser() {
     const name = document.getElementById('user-name').value.trim();
     const pin = document.getElementById('user-pin').value;
-    
+    const fpIdInput = document.getElementById('user-fpid').value;
+    const fpId = fpIdInput ? parseInt(fpIdInput) : -1;
+
     if (!name || pin.length !== 4) {
         showToast('Please fill all fields (PIN must be 4 digits)', 'error');
         return;
     }
-    
+
     try {
-        await API.post('/users', { name, pin });
+        const body = fpId > 0 ? { name, pin, fpId } : { name, pin };
+        await API.post('/users', body);
         hideModal();
         showToast('User added', 'success');
         loadUsers();
@@ -131,6 +139,50 @@ async function createUser() {
 
 async function deleteUser(id) {
     showConfirm('Delete User', 'Are you sure you want to delete this user?', `doDeleteUser(${id})`);
+}
+
+async function editUser(id) {
+    try {
+        const data = await API.get('/users/' + id);
+        showModal('Edit User #' + id, `
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" class="form-input" id="edit-name" value="${data.name || ''}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">PIN (leave empty to keep)</label>
+                <input type="password" class="form-input form-input-sm" id="edit-pin" maxlength="4" placeholder="----">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Fingerprint ID</label>
+                <input type="number" class="form-input form-input-sm" id="edit-fpid" min="1" max="127" value="${data.fpId > 0 ? data.fpId : ''}" placeholder="${data.fpId > 0 ? 'Current: #' + data.fpId : 'Not assigned'}">
+            </div>
+        `, `
+            <button class="btn" onclick="hideModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="doEditUser(${id})">Save</button>
+        `);
+    } catch (err) {
+        showToast('Failed to load user', 'error');
+    }
+}
+
+async function doEditUser(id) {
+    const name = document.getElementById('edit-name').value.trim();
+    const pin = document.getElementById('edit-pin').value;
+    const fpIdInput = document.getElementById('edit-fpid').value;
+    const body = {};
+    if (name) body.name = name;
+    if (pin) body.pin = pin;
+    if (fpIdInput) body.fpId = parseInt(fpIdInput);
+
+    try {
+        await API.put('/users/' + id, body);
+        hideModal();
+        showToast('User updated', 'success');
+        loadUsers();
+    } catch (err) {
+        showToast('Update failed', 'error');
+    }
 }
 
 async function logout() {
