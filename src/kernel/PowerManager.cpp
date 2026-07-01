@@ -17,7 +17,7 @@ RTC_DATA_ATTR bool needRecalibration = false;
 
 PowerManager::PowerManager()
     : currentState(PM_ACTIVE), lastActivityTime(0),
-      lightSleepThreshold(10000), deepSleepThreshold(60000),
+      lightSleepThreshold(30000), deepSleepThreshold(300000),
       pmConfigured(false), opMode(OperationalMode::OP_AP_FULL),
       sleepAllowed(false) {}
 
@@ -118,7 +118,7 @@ void PowerManager::update() {
             break;
 
         case PM_LIGHT_SLEEP:
-            if (idleTime > deepSleepThreshold) {
+            if (deepSleepThreshold > 0 && idleTime > deepSleepThreshold) {
                 enterDeepSleep();
             } else if (idleTime < lightSleepThreshold) {
                 exitLightSleep();
@@ -237,4 +237,12 @@ void PowerManager::setOperationalMode(OperationalMode mode) {
 
 bool PowerManager::isSleepAllowed() {
     return sleepAllowed;
+}
+
+uint8_t PowerManager::getSpeedFactor() {
+    unsigned long idle = millis() - lastActivityTime;
+    if (currentState != PM_ACTIVE) return 4;       // sleeping → quarter speed
+    if (idle > 30000 && opMode == OperationalMode::OP_STA_IDLE) return 3; // idle 30s+ → third speed
+    if (idle > 10000) return 2;                     // idle 10s+ → half speed
+    return 1;                                        // active → full speed
 }

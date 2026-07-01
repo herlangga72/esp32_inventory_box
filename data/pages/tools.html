@@ -39,21 +39,21 @@ async function loadTools() {
         const data = await API.get('/tools');
         const tbody = document.getElementById('tools-table');
         
-        if (!data.tools || data.tools.length === 0) {
+        if (!data.tl || data.tl.length === 0) {
             tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No tools registered</td></tr>';
             return;
         }
-        
-        tbody.innerHTML = data.tools.map(tool => `
+
+        tbody.innerHTML = data.tl.map(tool => `
             <tr>
-                <td>${tool.id}</td>
-                <td>${tool.name}</td>
-                <td>${tool.weight.toFixed(1)}</td>
+                <td>${tool.i}</td>
+                <td>${tool.n}</td>
+                <td>${tool.w.toFixed(1)}</td>
                 <td>±${tool.tolerance ? tool.tolerance.toFixed(1) : '2.0'}</td>
                 <td><span class="badge ${tool.active ? 'badge-success' : 'badge-muted'}">${tool.active ? 'Active' : 'Inactive'}</span></td>
                 <td>
-                    <button class="btn btn-sm" onclick="editTool(${tool.id}, '${tool.name}', ${tool.weight})">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteTool(${tool.id})">Delete</button>
+                    <button class="btn btn-sm" onclick="editTool(${tool.i}, '${tool.n}', ${tool.w})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteTool(${tool.i})">Delete</button>
                 </td>
             </tr>
         `).join('');
@@ -154,7 +154,7 @@ async function doDeleteTool(id) {
     }
 }
 
-// Make functions available globally
+pageManager.registerPage('tools', { init: init_tools });
 window.loadTools = loadTools;
 window.showAddToolModal = showAddToolModal;
 window.createTool = createTool;

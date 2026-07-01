@@ -39,7 +39,6 @@
 
 // ---- IPC infrastructure ----
 #define SR_POOL_QUEUE_BUFFERS_SIZE  4096    // 7 mailboxes × static queue data buffers
-#define SR_TASK_STACK_POOL_SIZE     16384   // 6 domain tasks (State 4K, Access 3K, Weight 3K, Motion 1.5K, Web 2.5K, Display 2K)
 
 // ---- Module arenas (NEW — replaces heap for each subsystem) ----
 #define SR_WIFI_POOL_SIZE           4096    // [existing] WiFi OSI allocator (lwIP internal buffers)
@@ -63,7 +62,7 @@ enum class ServiceId : uint8_t {
     ACCESS_CONTROLLER = 9, DOOR_SERVICE = 10, MATCHING_SERVICE = 11,
     TOOL_REPOSITORY = 12, USER_REPOSITORY = 13, LOG_REPOSITORY = 14,
     WEB_SERVER = 15, DISPLAY_MANAGER = 16, SERIAL_CLI = 17, SERVER_CLIENT = 18,
-    HX711 = 19, MPU6050 = 20, SSD1306 = 21, FINGERPRINT = 22,
+    HX711 = 19, MPU6050 = 20, FINGERPRINT = 21,
     COUNT
 };
 
@@ -408,7 +407,7 @@ struct WebServerMemory {
     char     apiBuffer[256];
 };
 
-enum class DisplayType : uint8_t { SSD1306 = 0, LCD1602 = 1 };
+enum class DisplayType : uint8_t { LCD1602 = 1 };
 
 struct DisplayManagerMemory {
     uint8_t  currentScreen;
@@ -456,7 +455,6 @@ struct ServerClientMemory {
 // ======================================================================
 #define HX711_POOL_SIZE        64
 #define MPU6050_POOL_SIZE      64
-#define SSD1306_POOL_SIZE      128
 #define LCD1602_POOL_SIZE      64
 #define FINGERPRINT_POOL_SIZE  256
 
@@ -490,10 +488,6 @@ struct ServiceRegistry {
     // Static WiFi driver pool (for OSI allocator)
     uint8_t wifiPool[SR_WIFI_POOL_SIZE];
     size_t wifiPoolUsed;
-
-    // Static task stacks + TCBs
-    uint8_t taskStackPool[SR_TASK_STACK_POOL_SIZE];
-    StaticTask_t taskTCBs[6];
 
     // ---- Module arenas (fixed-size, zero heap after boot) ----
     uint8_t netArena[SR_NET_ARENA_SIZE];          // WebServer sockets, HTTP buffers
@@ -587,7 +581,7 @@ static_assert(SR_POOL_KERNEL_SIZE >=
     "Kernel pool too small");
 
 static_assert(SR_POOL_HAL_SIZE >=
-    HX711_POOL_SIZE + MPU6050_POOL_SIZE + SSD1306_POOL_SIZE +
+    HX711_POOL_SIZE + MPU6050_POOL_SIZE +
     LCD1602_POOL_SIZE + FINGERPRINT_POOL_SIZE,
     "HAL pool too small");
 

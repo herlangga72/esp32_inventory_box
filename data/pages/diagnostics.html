@@ -42,10 +42,8 @@
 </div>
 
 <script>
-function init_diagnostics() {
-    // Diagnostics data is already loaded by global loadDiagnostics()
-    // This page displays what loadDiagnostics() updates
-}
+function init_diagnostics() {}
 
+pageManager.registerPage('diagnostics', { init: init_diagnostics });
 window.init_diagnostics = init_diagnostics;
 </script>

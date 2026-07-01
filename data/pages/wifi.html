@@ -35,18 +35,26 @@
                 <td style="width:150px;color:var(--text-muted);">Status</td>
                 <td>
                     <span class="wifi-status" id="wifi-status-display">
-                        <span class="wifi-icon">•</span>
+                        <span class="wifi-icon" id="wifi-icon">•</span>
                         <span id="wifi-status-text">Checking...</span>
                     </span>
+                    <span id="wifi-reconnecting-badge" style="display:none;margin-left:8px;color:#e67e22;font-size:0.85em;">reconnecting...</span>
                 </td>
+            </tr>
+            <tr>
+                <td style="color:var(--text-muted);">Mode</td>
+                <td id="wifi-mode">--</td>
             </tr>
             <tr>
                 <td style="color:var(--text-muted);">SSID</td>
                 <td id="wifi-current-ssid">--</td>
             </tr>
             <tr>
-                <td style="color:var(--text-muted);">Signal Strength</td>
-                <td id="wifi-current-rssi">-- dBm</td>
+                <td style="color:var(--text-muted);">Signal</td>
+                <td>
+                    <span id="wifi-signal-bars"></span>
+                    <span id="wifi-current-rssi" style="margin-left:6px;">-- dBm</span>
+                </td>
             </tr>
             <tr>
                 <td style="color:var(--text-muted);">IP Address</td>
@@ -80,39 +88,77 @@
 <script>
 function init_wifi() {
     loadWifiStatus();
-    
-    // Update WiFi status every 5 seconds
-    window.wifiInterval = setInterval(loadWifiStatus, 5000);
+    if (window._wifiRefresh) clearInterval(window._wifiRefresh);
+    window._wifiRefresh = setInterval(loadWifiStatus, 3000);
+}
+
+pageManager.registerPage('wifi', {
+    init: init_wifi,
+    d: function() {
+        if (window._wifiRefresh) { clearInterval(window._wifiRefresh); window._wifiRefresh = null; }
+    }
+});
+
+function signalBars(rssi) {
+    if (rssi === undefined || rssi === null) return '';
+    var bars = 0;
+    if (rssi >= -50) bars = 4;
+    else if (rssi >= -65) bars = 3;
+    else if (rssi >= -80) bars = 2;
+    else if (rssi >= -90) bars = 1;
+    var html = '';
+    for (var i = 0; i < 4; i++) {
+        html += '<span style="display:inline-block;width:6px;height:' + (6 + i * 5) + 'px;margin-right:2px;background:' + (i < bars ? 'var(--accent-color,#27ae60)' : '#555') + ';border-radius:1px;vertical-align:bottom;"></span>';
+    }
+    return html;
 }
 
 async function loadWifiStatus() {
     try {
         const data = await API.get('/wifi');
-        
-        const statusDisplay = document.getElementById('wifi-status-display');
-        const statusText = document.getElementById('wifi-status-text');
-        
-        if (data.connected) {
-            statusDisplay.classList.add('connected');
-            statusDisplay.classList.remove('disconnected');
+
+        var statusDisplay = document.getElementById('wifi-status-display');
+        var statusText = document.getElementById('wifi-status-text');
+        var icon = document.getElementById('wifi-icon');
+        var modeEl = document.getElementById('wifi-mode');
+        var reconnectBadge = document.getElementById('wifi-reconnecting-badge');
+
+        // Mode
+        modeEl.textContent = data.a ? 'Access Point' : 'Station';
+
+        // State + icon
+        if (data.st === 'Connected') {
             statusText.textContent = 'Connected';
-            statusDisplay.querySelector('.wifi-icon').textContent = '✓';
-        } else if (data.apMode) {
-            statusDisplay.classList.add('disconnected');
-            statusDisplay.classList.remove('connected');
+            statusText.style.color = 'var(--success,#27ae60)';
+            icon.textContent = '✓';
+            reconnectBadge.style.display = 'none';
+        } else if (data.st === 'Reconnecting') {
+            statusText.textContent = 'Reconnecting';
+            statusText.style.color = '#e67e22';
+            icon.textContent = '⟳';
+            reconnectBadge.style.display = 'inline';
+        } else if (data.st === 'Connecting') {
+            statusText.textContent = 'Connecting';
+            statusText.style.color = '#e67e22';
+            icon.textContent = '⟳';
+            reconnectBadge.style.display = 'none';
+        } else if (data.st === 'AP mode') {
             statusText.textContent = 'AP Mode';
-            statusDisplay.querySelector('.wifi-icon').textContent = '🔗';
+            statusText.style.color = 'var(--text-muted,#888)';
+            icon.textContent = '◆';
+            reconnectBadge.style.display = 'none';
         } else {
-            statusDisplay.classList.add('disconnected');
-            statusDisplay.classList.remove('connected');
-            statusText.textContent = 'Disconnected';
-            statusDisplay.querySelector('.wifi-icon').textContent = '✗';
+            statusText.textContent = data.st || 'Disconnected';
+            statusText.style.color = 'var(--danger,#e74c3c)';
+            icon.textContent = '✗';
+            reconnectBadge.style.display = 'none';
         }
-        
-        document.getElementById('wifi-current-ssid').textContent = data.ssid || '--';
-        document.getElementById('wifi-current-rssi').textContent = (data.rssi || '--') + ' dBm';
+
+        document.getElementById('wifi-current-ssid').textContent = data.ss || '--';
+        document.getElementById('wifi-current-rssi').textContent = (data.rss != null ? data.rss : '--') + ' dBm';
+        document.getElementById('wifi-signal-bars').innerHTML = signalBars(data.rss);
         document.getElementById('wifi-current-ip').textContent = data.ip || '--';
-        
+
     } catch (err) {
         console.error('WiFi status failed:', err);
     }
@@ -121,20 +167,18 @@ async function loadWifiStatus() {
 async function saveWifi() {
     const ssid = document.getElementById('wifi-ssid').value.trim();
     const pass = document.getElementById('wifi-pass').value;
-    
+
     if (!ssid) {
         showToast('Please enter SSID', 'warning');
         return;
     }
-    
+
     try {
         await API.post('/wifi', { ssid, password: pass });
         showToast('WiFi settings saved. Reconnecting...', 'success');
-        
-        // Clear password field
+
         document.getElementById('wifi-pass').value = '';
-        
-        // Wait for reconnect
+
         setTimeout(loadWifiStatus, 3000);
     } catch (err) {
         showToast('Failed to save WiFi settings', 'error');
@@ -144,30 +188,30 @@ async function saveWifi() {
 async function scanNetworks() {
     const card = document.getElementById('scan-results-card');
     const results = document.getElementById('scan-results');
-    
+
     card.style.display = 'block';
     results.innerHTML = '<div class="table-empty">Scanning for networks...</div>';
-    
+
     try {
-        // Use the config portal scan endpoint
         const res = await fetch('/scan');
         const data = await res.json();
-        
+
         if (!data.networks || data.networks.length === 0) {
             results.innerHTML = '<div class="table-empty">No networks found</div>';
             return;
         }
-        
+
         results.innerHTML = '<table class="table"><tbody>' +
-            data.networks.map(n => `
-                <tr style="cursor:pointer;" onclick="selectNetwork('${n.ssid}')">
-                    <td style="width:200px;">${n.ssid}</td>
-                    <td>${n.rssi} dBm</td>
-                    <td><button class="btn btn-sm">Select</button></td>
-                </tr>
-            `).join('') +
+            data.networks.map(function(n) {
+                var escSsid = n.ss.replace(/'/g, "\\'");
+                return '<tr style="cursor:pointer;" onclick="selectNetwork(\'' + escSsid + '\')">' +
+                    '<td style="width:200px;">' + n.ss + '</td>' +
+                    '<td>' + n.rss + ' dBm</td>' +
+                    '<td><button class="btn btn-sm">Select</button></td>' +
+                    '</tr>';
+            }).join('') +
             '</tbody></table>';
-        
+
     } catch (err) {
         console.error('Scan failed:', err);
         results.innerHTML = '<div class="table-empty">Scan failed</div>';
@@ -178,7 +222,7 @@ function selectNetwork(ssid) {
     document.getElementById('wifi-ssid').value = ssid;
     document.getElementById('wifi-pass').focus();
     document.getElementById('scan-results-card').style.display = 'none';
-    showToast(`Selected: ${ssid}`, 'info');
+    showToast('Selected: ' + ssid, 'info');
 }
 
 window.init_wifi = init_wifi;
@@ -186,13 +230,4 @@ window.loadWifiStatus = loadWifiStatus;
 window.saveWifi = saveWifi;
 window.scanNetworks = scanNetworks;
 window.selectNetwork = selectNetwork;
-
-// Cleanup interval on page leave
-const originalNavigate = navigateTo;
-window.navigateTo = function(page) {
-    if (window.wifiInterval) {
-        clearInterval(window.wifiInterval);
-    }
-    originalNavigate(page);
-};
 </script>

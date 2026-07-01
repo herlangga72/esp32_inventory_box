@@ -24,7 +24,7 @@ struct Tool {
     }
     
     bool matchesWeight(float weight, float delta) const {
-        float diff = abs(delta - weightGrams);
+        float diff = fabsf(delta - weightGrams);
         return diff <= toleranceGrams;
     }
 };

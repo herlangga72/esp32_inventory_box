@@ -142,16 +142,61 @@
 </div>
 
 <script>
-let accessPollInterval = null;
-
 function init_access() {
     accessLoadConfig();
     accessLoadUsers();
     accessLoadLogs();
-
-    if (accessPollInterval) clearInterval(accessPollInterval);
-    accessPollInterval = setInterval(accessRefresh, 2000);
 }
+
+pageManager.registerPage('access', {
+    init: init_access,
+    onAccess: function(data) {
+        var stateEl = document.getElementById('access-state');
+        if (!stateEl) return;
+        stateEl.textContent = data.s || '--';
+        stateEl.className = 'status-card-value';
+        if (data.s === 'granted' || data.s === 'unlocking' || data.s === 'unlocked') {
+            stateEl.classList.add('success');
+        } else if (data.s === 'denied') {
+            stateEl.classList.add('error');
+        }
+
+        var doorStateEl = document.getElementById('access-door-state');
+        if (doorStateEl) {
+            var ds = 'unknown', dd = '';
+            if (data.s === 'locked' || data.s === 'idle' || data.s === 'scanning') { ds = 'Locked'; dd = 'Waiting for fingerprint'; }
+            else if (data.s === 'unlocking') { ds = 'Unlocking...'; dd = 'Relay active'; }
+            else if (data.s === 'unlocked') { ds = 'Unlocked'; dd = 'Door can be opened'; }
+            else if (data.s === 'locking') { ds = 'Locking...'; dd = 'Relay deactivated'; }
+            doorStateEl.textContent = ds;
+            doorStateEl.className = 'status-card-value';
+            if (ds === 'Unlocked' || ds === 'Unlocking...') doorStateEl.classList.add('success');
+            document.getElementById('access-door-detail').textContent = dd;
+        }
+
+        var serverEl = document.getElementById('access-server-status');
+        if (serverEl) {
+            var detailEl = document.getElementById('access-server-detail');
+            if (data.sst === 0) {
+                serverEl.textContent = 'Online'; serverEl.className = 'status-card-value success';
+                if (detailEl) detailEl.textContent = (data.sl || 0) + 'ms';
+            } else if (data.sst === 1) {
+                serverEl.textContent = 'Offline'; serverEl.className = 'status-card-value error';
+                if (detailEl) detailEl.textContent = (data.sfd || 0) + 'ms';
+            } else {
+                serverEl.textContent = 'Not Configured'; serverEl.className = 'status-card-value';
+                if (detailEl) detailEl.textContent = 'Set server URL below';
+            }
+        }
+
+        var fpEl = document.getElementById('access-last-fp');
+        if (fpEl) fpEl.textContent = (data.lfp || 0) > 0 ? '#' + data.lfp : '--';
+        var fbEl = document.getElementById('access-fallback-status');
+        if (fbEl) fbEl.textContent = 'Local fallback: ' + (data.lfb ? 'ON' : 'OFF');
+        var leEl = document.getElementById('access-last-event');
+        if (leEl) leEl.textContent = data.le || '--';
+    }
+});
 
 async function accessRefresh() {
     try {
@@ -159,27 +204,27 @@ async function accessRefresh() {
 
         // State
         const stateEl = document.getElementById('access-state');
-        stateEl.textContent = data.state || '--';
+        stateEl.textContent = data.s || '--';
         stateEl.className = 'status-card-value';
-        if (data.state === 'granted' || data.state === 'unlocking' || data.state === 'unlocked') {
+        if (data.s === 'granted' || data.s === 'unlocking' || data.s === 'unlocked') {
             stateEl.classList.add('success');
-        } else if (data.state === 'denied') {
+        } else if (data.s === 'denied') {
             stateEl.classList.add('error');
         }
 
         // Door state
         let doorState = 'unknown';
         let doorDetail = '';
-        if (data.state === 'locked' || data.state === 'idle' || data.state === 'scanning') {
+        if (data.s === 'locked' || data.s === 'idle' || data.s === 'scanning') {
             doorState = 'Locked';
             doorDetail = 'Waiting for fingerprint';
-        } else if (data.state === 'unlocking') {
+        } else if (data.s === 'unlocking') {
             doorState = 'Unlocking...';
             doorDetail = 'Relay active';
-        } else if (data.state === 'unlocked') {
+        } else if (data.s === 'unlocked') {
             doorState = 'Unlocked';
             doorDetail = 'Door can be opened';
-        } else if (data.state === 'locking') {
+        } else if (data.s === 'locking') {
             doorState = 'Locking...';
             doorDetail = 'Relay deactivated';
         }
@@ -195,14 +240,14 @@ async function accessRefresh() {
         // Server status
         const serverStatusEl = document.getElementById('access-server-status');
         const serverDetailEl = document.getElementById('access-server-detail');
-        if (data.serverStatus === 0) {
+        if (data.sst === 0) {
             serverStatusEl.textContent = 'Online';
             serverStatusEl.className = 'status-card-value success';
-            serverDetailEl.textContent = data.serverLatency + 'ms';
-        } else if (data.serverStatus === 1) {
+            serverDetailEl.textContent = data.sl + 'ms';
+        } else if (data.sst === 1) {
             serverStatusEl.textContent = 'Offline';
             serverStatusEl.className = 'status-card-value error';
-            serverDetailEl.textContent = formatUptime(data.serverFailDuration);
+            serverDetailEl.textContent = formatUptime(data.sfd);
         } else {
             serverStatusEl.textContent = 'Not Configured';
             serverStatusEl.className = 'status-card-value';
@@ -210,11 +255,11 @@ async function accessRefresh() {
         }
 
         // Last fingerprint
-        document.getElementById('access-last-fp').textContent = data.lastFpId > 0 ? '#' + data.lastFpId : '--';
-        document.getElementById('access-fallback-status').textContent = 'Local fallback: ' + (data.localFallback ? 'ON' : 'OFF');
+        document.getElementById('access-last-fp').textContent = data.lfp > 0 ? '#' + data.lfp : '--';
+        document.getElementById('access-fallback-status').textContent = 'Local fallback: ' + (data.lfb ? 'ON' : 'OFF');
 
         // Last event
-        document.getElementById('access-last-event').textContent = data.lastEvent || '--';
+        document.getElementById('access-last-event').textContent = data.le || '--';
 
     } catch (err) {
         console.error('Access status fetch failed:', err);
@@ -249,12 +294,12 @@ async function accessQuickAddUser() {
     }
     try {
         const data = await API.post('/users', { name, pin });
-        if (data.success) {
+        if (data.ok) {
             // Auto-select the new user in the dropdown
             await accessLoadUsers();  // reloads dropdown
             const sel = document.getElementById('enroll-user-id');
             for (let i = 0; i < sel.options.length; i++) {
-                if (sel.options[i].value == data.id) {
+                if (sel.options[i].value == data.i) {
                     sel.selectedIndex = i;
                     break;
                 }
@@ -279,7 +324,7 @@ async function accessEnroll() {
         const body = userId > 0 ? { fpId, userId } : { fpId };
         const data = await API.post('/fingerprint/enroll', body);
 
-        if (data.success) {
+        if (data.ok) {
             document.getElementById('btn-enroll-start').style.display = 'none';
             document.getElementById('btn-enroll-cancel').style.display = 'inline-block';
             document.getElementById('enroll-progress').style.display = 'block';
@@ -308,25 +353,25 @@ async function accessPollEnroll() {
     try {
         const data = await API.get('/fingerprint/enroll/status');
 
-        if (data.stepName === 'waiting') {
+        if (data.sn === 'waiting') {
             document.getElementById('enroll-message').textContent = 'Place finger on sensor...';
             document.getElementById('enroll-bar').style.width = '25%';
             setTimeout(accessPollEnroll, 500);
-        } else if (data.stepName === 'second_capture') {
+        } else if (data.sn === 'second_capture') {
             document.getElementById('enroll-message').textContent = 'Remove finger, then place again...';
             document.getElementById('enroll-bar').style.width = '60%';
             setTimeout(accessPollEnroll, 500);
-        } else if (data.stepName === 'complete') {
+        } else if (data.sn === 'complete') {
             document.getElementById('enroll-message').textContent = 'Fingerprint enrolled!';
             document.getElementById('enroll-bar').style.width = '100%';
             document.getElementById('enroll-result').style.display = 'block';
             document.getElementById('enroll-result').innerHTML =
-                '<span style="color:var(--success);font-size:12px;">Fingerprint #' + data.fpId + ' enrolled successfully!</span>';
+                '<span style="color:var(--success);font-size:12px;">Fingerprint #' + data.fp + ' enrolled successfully!</span>';
             document.getElementById('btn-enroll-start').style.display = 'inline-block';
             document.getElementById('btn-enroll-cancel').style.display = 'none';
-            showToast('Fingerprint #' + data.fpId + ' enrolled', 'success');
+            showToast('Fingerprint #' + data.fp + ' enrolled', 'success');
             accessLoadUsers();
-        } else if (data.stepName === 'failed') {
+        } else if (data.sn === 'failed') {
             document.getElementById('enroll-message').textContent = 'Enrollment failed';
             document.getElementById('enroll-bar').style.width = '0%';
             document.getElementById('enroll-result').style.display = 'block';
@@ -354,7 +399,7 @@ async function accessLoadConfig() {
         const data = await API.get('/access/server');
         document.getElementById('cfg-server-url').value = data.serverUrl || '';
         document.getElementById('cfg-server-token').value = '';
-        document.getElementById('cfg-local-fallback').checked = data.localFallback !== false;
+        document.getElementById('cfg-local-fallback').checked = data.lfb !== false;
     } catch (err) {
         console.error('Load server config failed:', err);
     }
@@ -414,7 +459,7 @@ async function accessTestServer() {
 async function accessUnlock() {
     try {
         const data = await API.post('/door/unlock');
-        if (data.success) {
+        if (data.ok) {
             showToast('Door unlocking...', 'success');
             accessRefresh();
         } else {
@@ -432,8 +477,8 @@ function accessPopulateUserSelect(users) {
     sel.innerHTML = '<option value="-1">No user</option>';
     users.forEach(u => {
         const opt = document.createElement('option');
-        opt.value = u.id;
-        opt.textContent = u.name + (u.fpId > 0 ? ' (FP #' + u.fpId + ')' : '');
+        opt.value = u.i;
+        opt.textContent = u.n + (u.fp > 0 ? ' (FP #' + u.fp + ')' : '');
         sel.appendChild(opt);
     });
 }
@@ -463,19 +508,19 @@ async function accessLoadUsers() {
                 <tbody>
                     ${data.users.map(u => `
                         <tr>
-                            <td>${u.name || 'User #' + u.id}</td>
+                            <td>${u.n || 'User #' + u.i}</td>
                             <td>
                                 <span class="badge badge-${u.active ? 'success' : 'danger'}">${u.active ? 'Active' : 'Inactive'}</span>
                             </td>
-                            <td id="access-fp-cell-${u.id}">
-                                ${u.fpId > 0
-                                    ? '<span style="color:var(--success);">#' + u.fpId + '</span>'
+                            <td id="access-fp-cell-${u.i}">
+                                ${u.fp > 0
+                                    ? '<span style="color:var(--success);">#' + u.fp + '</span>'
                                     : '<span style="color:var(--text-muted);">Not assigned</span>'}
                             </td>
                             <td>
-                                ${u.fpId > 0
-                                    ? `<button class="btn" onclick="accessDeleteFingerprint(${u.fpId}, ${u.id})" style="font-size:11px;padding:2px 8px;">Delete FP #${u.fpId}</button>`
-                                    : `<button class="btn" onclick="accessShowAssignFp(${u.id})" style="font-size:11px;padding:2px 8px;">Assign FP</button>`}
+                                ${u.fp > 0
+                                    ? `<button class="btn" onclick="accessDeleteFingerprint(${u.fp}, ${u.i})" style="font-size:11px;padding:2px 8px;">Delete FP #${u.fp}</button>`
+                                    : `<button class="btn" onclick="accessShowAssignFp(${u.i})" style="font-size:11px;padding:2px 8px;">Assign FP</button>`}
                             </td>
                         </tr>
                     `).join('')}
@@ -539,11 +584,11 @@ async function accessLoadLogs() {
         const data = await API.get('/logs?limit=30&offset=0');
         const tbody = document.getElementById('access-log-table');
 
-        if (!data.logs || data.logs.length === 0) {
+        if (!data.lg || data.lg.length === 0) {
             tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No access events yet</td></tr>';
         } else {
             // Filter for access-related tags
-            const accessLogs = data.logs.filter(l =>
+            const accessLogs = data.lg.filter(l =>
                 l.tag === 'ACCESS' || l.tag === 'DOOR' || l.tag === 'FINGERPRINT' || l.tag === 'SERVER'
             );
 
@@ -578,8 +623,4 @@ async function accessLoadLogs() {
     }
 }
 
-// Cleanup on page unload
-window.addEventListener('beforeunload', () => {
-    if (accessPollInterval) clearInterval(accessPollInterval);
-});
 </script>

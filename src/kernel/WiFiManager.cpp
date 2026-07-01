@@ -46,6 +46,7 @@ void WiFiManager::eventHandler(void* arg, esp_event_base_t base, int32_t id, voi
         LOG_INFO("WIFI", "STA got IP: %s", self->sta.ip);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         self->sta.connected = false;
+        self->sta.ip[0] = '\0';
         LOG_INFO("WIFI", "STA disconnected");
     }
 }
@@ -97,25 +98,21 @@ bool WiFiManager::connectSTA() {
     esp_event_loop_create_default();
     sta.netif = esp_netif_create_default_wifi_sta();
 
-    wifi_osi_funcs_t osi = {};
-    osi._malloc = wifiMalloc;
-    osi._free   = wifiFree;
     sta.initCfg = WIFI_INIT_CONFIG_DEFAULT();
-    sta.initCfg.osi_funcs = &osi;
-
-    ESP_ERROR_CHECK(esp_wifi_init(&sta.initCfg));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, eventHandler, this));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, eventHandler, this));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // ponytail: default OSI allocators — custom one broke ESP-IDF version check
+    if (esp_wifi_init(&sta.initCfg) != ESP_OK) { LOG_ERROR("WIFI", "esp_wifi_init failed"); return false; }
+    if (esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, eventHandler, this) != ESP_OK) { return false; }
+    if (esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, eventHandler, this) != ESP_OK) { return false; }
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) { return false; }
 
     strncpy((char*)sta.staConfig.sta.ssid, ssidBuf, sizeof(sta.staConfig.sta.ssid) - 1);
     strncpy((char*)sta.staConfig.sta.password, passBuf, sizeof(sta.staConfig.sta.password) - 1);
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta.staConfig));
+    if (esp_wifi_set_config(WIFI_IF_STA, &sta.staConfig) != ESP_OK) { return false; }
 
     sta.connected = false;
     sta.connTimeout = 15000;
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_connect());
+    if (esp_wifi_start() != ESP_OK) { return false; }
+    if (esp_wifi_connect() != ESP_OK) { return false; }
 
     unsigned long start = millis();
     while (millis() - start < sta.connTimeout) {
@@ -184,15 +181,81 @@ void WiFiManager::update() {
     }
 }
 
-bool WiFiManager::isConnected() { return mode == WiFiOpMode::AP || sta.connected; }
+bool WiFiManager::isConnected() {
+    if (mode == WiFiOpMode::AP) return true;
+    if (mode != WiFiOpMode::STA) return false;
+    if (sta.connected) return true;  // fast path
+    // Fallback: check IP — if we have one, we're connected
+    esp_netif_t* n = esp_netif_get_handle_from_ifkey("STA_DEF");
+    if (n) {
+        esp_netif_ip_info_t ip;
+        if (esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr != 0) {
+            sta.connected = true;
+            return true;
+        }
+    }
+    return false;
+}
 bool WiFiManager::isAPMode()   { return mode == WiFiOpMode::AP; }
-const char* WiFiManager::getIP()    { return (mode == WiFiOpMode::AP) ? "192.168.4.1" : sta.ip; }
-const char* WiFiManager::getSSID()  { return (mode == WiFiOpMode::AP) ? AP_SSID : ssid; }
+const char* WiFiManager::getIP()    {
+    if (mode == WiFiOpMode::AP) return "192.168.4.1";
+    if (sta.ip[0]) return sta.ip;
+    // Fallback: try lwIP
+    esp_netif_t* n = esp_netif_get_handle_from_ifkey("STA_DEF");
+    if (n) {
+        esp_netif_ip_info_t ip;
+        if (esp_netif_get_ip_info(n, &ip) == ESP_OK) {
+            snprintf(sta.ip, sizeof(sta.ip), IPSTR, IP2STR(&ip.ip));
+            return sta.ip;
+        }
+    }
+    return "";
+}
+const char* WiFiManager::getSSID()  {
+    if (mode == WiFiOpMode::AP) return AP_SSID;
+    if (ssid[0]) return ssid;
+    // Fallback: read from stored credentials
+    if (storage.getChars("wifi_ssid", ssid, sizeof(ssid)) > 0) {
+        return ssid;
+    }
+    // Last resort: try hardware
+    wifi_ap_record_t apInfo;
+    if (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK) {
+        strncpy(ssid, (const char*)apInfo.ssid, sizeof(ssid) - 1);
+        return ssid;
+    }
+    return "";
+}
 
 int WiFiManager::getRSSI() {
     if (mode != WiFiOpMode::STA) return 0;
     wifi_ap_record_t apInfo;
     return (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK) ? apInfo.rssi : 0;
+}
+
+const char* WiFiManager::getState() {
+    if (mode == WiFiOpMode::AP) return "AP mode";
+    if (mode != WiFiOpMode::STA) return "Off";
+    // IP presence is the most reliable check — ap_info can fail even when connected
+    esp_netif_t* n = esp_netif_get_handle_from_ifkey("STA_DEF");
+    bool hasIP = false;
+    if (n) {
+        esp_netif_ip_info_t ip;
+        hasIP = (esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr != 0);
+    }
+    if (hasIP) {
+        sta.connected = true;
+        if (!ssid[0]) {  // populate SSID from hardware if missing
+            wifi_ap_record_t apInfo;
+            if (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK) {
+                strncpy(ssid, (const char*)apInfo.ssid, sizeof(ssid) - 1);
+            }
+        }
+        return sta.reconnecting ? "Reconnecting" : "Connected";
+    }
+    sta.connected = false;
+    sta.ip[0] = '\0';
+    return sta.reconnecting ? "Reconnecting" : "Connecting";
 }
 
 void WiFiManager::setCredentials(const char* s, const char* p) {

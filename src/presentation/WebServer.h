@@ -5,14 +5,9 @@
 #include <WebServer.h>
 #include "../domain/events/EventBus.h"
 #include "../kernel/ServiceRegistry.h"
+#include "../data/LogRepository.h"
+#include "../kernel/WiFiManager.h"
 
-class StateManager;
-class ToolRepository;
-class UserRepository;
-class LogRepository;
-class WeightService;
-class WiFiManager;
-class SystemStatus;
 class FingerprintDriver;
 class ServerClient;
 
@@ -23,29 +18,18 @@ public:
     void begin();
     void handle();
 
-    void setStateManager(StateManager* sm);
-    void setToolRepository(ToolRepository* tr);
-    void setUserRepository(UserRepository* ur);
     void setLogRepository(LogRepository* lr);
-    void setWeightService(WeightService* ws);
-    void setWiFiManager(WiFiManager* wm);
-    void setSystemStatus(SystemStatus* ss);
     void setFingerprintDriver(FingerprintDriver* fp);
     void setServerClient(ServerClient* sc);
 
     void notifyClients(const char* event, const char* data = nullptr);
+    bool hasActiveClient();
 
 private:
     ::WebServer server;
     EventBus* events;
 
-    StateManager* stateManager;
-    ToolRepository* toolRepo;
-    UserRepository* userRepo;
     LogRepository* logRepo;
-    WeightService* weightService;
-    WiFiManager* wifiManager;
-    SystemStatus* systemStatus;
     FingerprintDriver* fpDriver;
     ServerClient* serverClient;
 
@@ -85,11 +69,13 @@ private:
     void sendError(int code, const char* message);
     String stateToString(int state);
     void handleStaticFile(const char* path, const char* mimeType);
+    void logRequest();
 };
 
 // Global wrappers used by main.cpp
 void web_begin();
 void web_stop();
 void web_handle();
+void web_setLogRepository(LogRepository* lr);
 
 #endif // WEB_SERVER_H

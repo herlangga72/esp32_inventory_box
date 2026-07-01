@@ -271,8 +271,7 @@ void* ServiceRegistry::getHALPool(ServiceId id) {
     switch (id) {
         case ServiceId::HX711:       return &halPool[0];
         case ServiceId::MPU6050:     return &halPool[HX711_POOL_SIZE];
-        case ServiceId::SSD1306:     return &halPool[HX711_POOL_SIZE + MPU6050_POOL_SIZE];
-        case ServiceId::FINGERPRINT: return &halPool[HX711_POOL_SIZE + MPU6050_POOL_SIZE + SSD1306_POOL_SIZE];
+        case ServiceId::FINGERPRINT: return &halPool[HX711_POOL_SIZE + MPU6050_POOL_SIZE];
         default: return nullptr;
     }
 }

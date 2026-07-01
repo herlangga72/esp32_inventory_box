@@ -21,13 +21,9 @@
 #define PIN_MPU_SCL      22    // D22 available on both
 #define MPU6050_ADDR     0x68
 
-// SSD1306 OLED Display (I2C)
-#define PIN_DISPLAY_SDA  21    // D21 (shared I2C bus)
-#define PIN_DISPLAY_SCL  22    // D22
-#define PIN_DISPLAY_RST  19    // D19 (OLED reset)
-#define DISPLAY_ADDR     0x3C
-
-// LCD 16x2 with PCF8574 I2C Backpack — shares SDA/SCL with MPU6050+SSD1306
+// LCD 16x2 with PCF8574 I2C Backpack — shares SDA/SCL with MPU6050
+#define PIN_DISPLAY_SDA  21
+#define PIN_DISPLAY_SCL  22
 #define LCD1602_ADDR_1   0x27  // Most common backpack address
 #define LCD1602_ADDR_2   0x3F  // Alternate (some PCF8574 modules)
 
@@ -70,7 +66,7 @@ namespace Config {
     constexpr float WEIGHT_THRESHOLD_GRAMS     = 2.0f;
     constexpr int   SETTLING_TIME_MS           = 3000;
     constexpr int   IDLE_TIMEOUT_MS            = 30000;
-    constexpr int   DEEP_SLEEP_TIMEOUT_MS      = 60000;
+    constexpr int   DEEP_SLEEP_TIMEOUT_MS      = 0;     // disabled — unstable
     constexpr float MOTION_THRESHOLD_G         = 0.15f;
     constexpr float TILT_THRESHOLD_G           = 0.7f;
     constexpr float FREE_FALL_THRESHOLD_G      = 0.16f;

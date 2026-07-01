@@ -41,7 +41,9 @@ public:
 
     bool isConnected();
     bool isAPMode();
+    bool isReconnecting() const { return mode == WiFiOpMode::STA && sta.reconnecting; }
     WiFiOpMode getMode() const { return mode; }
+    const char* getState();
 
     const char* getIP();
     const char* getSSID();

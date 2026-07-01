@@ -35,6 +35,7 @@ public:
     void setThresholds(unsigned long lightMs, unsigned long deepMs);
     void setOperationalMode(OperationalMode mode);
     bool isSleepAllowed();
+    uint8_t getSpeedFactor();  // 1=full, 2=half, 4=quarter
 
 private:
     PowerState currentState;

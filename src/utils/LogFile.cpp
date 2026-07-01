@@ -37,11 +37,19 @@ static void rotateFiles() {
 
 bool logFileInit() {
     spiffsLock();
-    if (!SPIFFS.begin(false)) {  // no auto-format — fast fail if partition missing
-        spiffsUnlock();
-        s_logFileReady = false;
-        return false;
+    // Mount without formatting (uploadfs already writes a formatted partition)
+    if (!SPIFFS.begin(false)) {
+        // First boot after flash — format once
+        SPIFFS.end();
+        if (!SPIFFS.begin(true)) {
+            spiffsUnlock();
+            s_logFileReady = false;
+            return false;
+        }
     }
+
+    // Ensure /logs directory exists (SPIFFS doesn't auto-create parent dirs)
+    SPIFFS.mkdir("/logs");
 
     File test = SPIFFS.open(LOG_FILE_PATH, "a");
     if (!test) {

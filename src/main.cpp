@@ -16,7 +16,6 @@
 // GPIO/Serial/Timer: keep Arduino for now (file still needs Arduino.h for WiFi/OTA/String).
 #include "hal/HX711Driver.h"
 #include "hal/MPU6050Driver.h"
-#include "hal/SSD1306Driver.h"
 #include "hal/Lcd1602Driver.h"
 #include "hal/InterruptManager.h"
 #include "hal/RtcDriver.h"
@@ -60,7 +59,6 @@ TaskHandle_t accessTaskHandle = NULL;
 // HAL drivers — live in registry HAL pool
 HX711Driver hx711(PIN_HX711_DT, PIN_HX711_SCK, PIN_HX711_DRDY);
 MPU6050Driver mpu;
-SSD1306Driver display(PIN_DISPLAY_SDA, PIN_DISPLAY_SCL, PIN_DISPLAY_RST);
 Lcd1602Driver lcdDisplay;
 
 // Storage (NVS wrapper) — lives on stack, heap-allocates Preferences internally (unavoidable)
@@ -73,6 +71,7 @@ WiFiManager wifiManager;
 // Access control hardware
 FingerprintDriver fpDriver;
 ServerClient serverClient;
+LogRepository logRepo;
 
 #ifndef RELEASE_BUILD
 SerialCLI cli;
@@ -139,12 +138,10 @@ static void bootCore0Worker(void* arg) {
     initWithRetry("MPU6050", [](){ return mpu.begin(); },
         "I2C address 0x68 not found - check wiring", 3, 200);
 
-    // Auto-detect display: probe LCD (0x27, 0x3F) then SSD1306 (0x3C)
+    // Init LCD 16x2 (only display type supported)
     {
         auto* dm = g_registry.getDisplayManager();
         bool hasLCD = i2cProbe(LCD1602_ADDR_1) || i2cProbe(LCD1602_ADDR_2);
-        bool hasOLED = i2cProbe(DISPLAY_ADDR);
-
         if (hasLCD) {
             LOG_INFO("INIT", "LCD 16x2 detected on I2C");
             initWithRetry("Display", [](){
@@ -152,19 +149,11 @@ static void bootCore0Worker(void* arg) {
                 return lcdDisplay.init(addr);
             }, "LCD not responding on 0x27 or 0x3F", 2, 300);
             dm->displayType = static_cast<uint8_t>(DisplayType::LCD1602);
-        } else if (hasOLED) {
-            LOG_INFO("INIT", "SSD1306 OLED detected on I2C");
-            initWithRetry("Display", [](){
-                display.init();
-                delay(50);
-                return display.isInitialized();
-            }, "I2C address 0x3C not found - check wiring", 2, 300);
-            dm->displayType = static_cast<uint8_t>(DisplayType::SSD1306);
         } else {
-            LOG_ERROR("INIT", "No display detected on I2C bus");
+            LOG_ERROR("INIT", "No LCD 16x2 detected on I2C bus");
             ss_markError(g_registry.getSystemStatus(), "Display",
-                "No I2C display found — check wiring");
-            dm->displayType = static_cast<uint8_t>(DisplayType::SSD1306);
+                "No LCD found — check wiring");
+            dm->displayType = static_cast<uint8_t>(DisplayType::LCD1602);
         }
     }
 
@@ -181,11 +170,12 @@ static void bootCore0Worker(void* arg) {
     vTaskDelete(NULL);
 }
 
-// Dynamic task delay — reads operational mode from registry
+// Dynamic task delay — reads operational mode + speed factor from PowerManager
 inline TickType_t opDelay(int apMs, int staMs) {
-    return (ss_getOperationalMode(g_registry.getSystemStatus()) == OperationalMode::OP_AP_FULL)
-        ? pdMS_TO_TICKS(apMs)
-        : pdMS_TO_TICKS(staMs);
+    TickType_t base = (ss_getOperationalMode(g_registry.getSystemStatus()) == OperationalMode::OP_AP_FULL)
+        ? pdMS_TO_TICKS(apMs) : pdMS_TO_TICKS(staMs);
+    uint8_t sf = powerManager.getSpeedFactor();
+    return (sf > 1) ? base * sf : base;
 }
 
 // ============= TASKS =============
@@ -216,6 +206,7 @@ void weightTask(void* param) {
         return;
     }
 weight_start:
+    auto* wq = g_registry.getQueue(ServiceId::WEIGHT_SERVICE);
     while (true) {
         if (InterruptManager::isHX711Ready()) {
             int32_t raw = hx711.readRaw();
@@ -225,10 +216,12 @@ weight_start:
         }
         ws_update(mem);  // drains mailbox + processes filter
 
-        g_registry.sendCmd(ServiceId::POWER,
-            static_cast<uint8_t>(KernelMsgType::ACTIVITY));
         g_registry.heartbeat(ServiceId::WEIGHT_SERVICE);
-        vTaskDelay(opDelay(TaskRate::AP_WEIGHT_MS, TaskRate::STA_WEIGHT_MS));
+        // ponytail: queue-blocked — message wakes immediately
+        ServiceMessage _wm;
+        if (wq && xQueueReceive(wq, &_wm, opDelay(TaskRate::AP_WEIGHT_MS, TaskRate::STA_WEIGHT_MS)) == pdTRUE) {
+            continue;  // early wake from message
+        }
     }
 }
 
@@ -319,16 +312,20 @@ void displayTask(void* param) {
     }
 
     auto* mem = g_registry.getDisplayManager();
+    auto* dq = g_registry.getQueue(ServiceId::DISPLAY_MANAGER);
     while (true) {
         ServiceMessage msg;
         while (g_registry.tryReceive(ServiceId::DISPLAY_MANAGER, msg)) {
             dm_dispatchMessage(mem, msg);
         }
 
-        dm_update(mem, &display, &lcdDisplay);
+        dm_update(mem, &lcdDisplay);
 
-        TickType_t delayTicks = opDelay(TaskRate::AP_DISPLAY_MS, TaskRate::STA_DISPLAY_MS);
-        vTaskDelay(delayTicks);
+        // ponytail: queue-blocked — message wakes for redraw
+        if (dq && xQueueReceive(dq, &msg, opDelay(TaskRate::AP_DISPLAY_MS, TaskRate::STA_DISPLAY_MS)) == pdTRUE) {
+            dm_dispatchMessage(mem, msg);
+            continue;  // redraw immediately
+        }
     }
 }
 
@@ -357,6 +354,7 @@ void accessTask(void* param) {
 
     auto* acMem = g_registry.getAccessController();
     auto* dsMem = g_registry.getDoorService();
+    auto* aq = g_registry.getQueue(ServiceId::ACCESS_CONTROLLER);
 
     while (true) {
         ServiceMessage msg;
@@ -370,7 +368,12 @@ void accessTask(void* param) {
         ac_update(acMem, &fpDriver, &serverClient, dsMem);
         ds_update(dsMem);
         serverClient.update();
-        vTaskDelay(opDelay(TaskRate::AP_ACCESS_MS, TaskRate::STA_ACCESS_MS));
+
+        // ponytail: queue-blocked — message wakes immediately
+        if (aq && xQueueReceive(aq, &msg, opDelay(TaskRate::AP_ACCESS_MS, TaskRate::STA_ACCESS_MS)) == pdTRUE) {
+            ac_dispatchMessage(acMem, msg, &fpDriver, &serverClient, dsMem);
+            continue;
+        }
     }
 }
 
@@ -515,7 +518,7 @@ void setup() {
 
     // Init repositories
     tr_init(g_registry.getToolRepository(), &storage);
-    // ur_init, lr_init...
+    ur_init(g_registry.getUserRepository(), &storage);
 
     // Init PowerManager
     powerManager.setBaseline(savedBaseline);
@@ -549,6 +552,7 @@ void setup() {
     if (!wifiManager.isAPMode()) {
         LOG_INFO("INIT", "Starting Web Server...");
         web_begin();
+        web_setLogRepository(&logRepo);
         ss_markOK(ss, "WebServer");
         LOG_INFO("INIT", "WebServer: OK");
     } else {
@@ -585,12 +589,10 @@ void setup() {
     // ---- DISPLAY MANAGER ----
     if (ss_getStatus(ss, "Display") != ComponentStatus::ERROR) {
         auto* dm = g_registry.getDisplayManager();
-        bool isLCD = (dm->displayType == static_cast<uint8_t>(DisplayType::LCD1602));
-        dm->healthy = isLCD ? lcdDisplay.isInitialized() : display.isInitialized();
+        dm->healthy = lcdDisplay.isInitialized();
         dm->awake = true;
         dm->currentScreen = 0;
-        LOG_INFO("INIT", "DisplayManager: %s heap=%d",
-                 isLCD ? "LCD 16x2" : "SSD1306", ESP.getFreeHeap());
+        LOG_INFO("INIT", "DisplayManager: LCD 16x2 heap=%d", ESP.getFreeHeap());
     } else {
         LOG_INFO("INIT", "DisplayManager: SKIPPED (display offline)");
     }
@@ -669,48 +671,30 @@ void setup() {
     LOG_INFO("INIT", "Creating tasks...");
 
     int tasksOk = 0, tasksFail = 0;
-    // Static stack allocator (WiFi stays heap — needs large TCP/IP stack)
-    static size_t stackOff = 0;
-    static int tcbIdx = 0;
-    #define CREATE_TASK_STATIC(fn, name, stackWords, prio, handle, core) do { \
-        StackType_t* stk = (StackType_t*)&g_registry.taskStackPool[stackOff]; \
-        StaticTask_t* tcb = &g_registry.taskTCBs[tcbIdx++]; \
-        stackOff += (stackWords) * sizeof(StackType_t); \
-        TaskHandle_t th = xTaskCreateStaticPinnedToCore(fn, name, stackWords, NULL, prio, stk, tcb, core); \
-        if (th == NULL) { \
-            LOG_ERROR("INIT", "FAILED to create %s task", name); \
-            tasksFail++; \
-        } else { \
-            tasksOk++; \
-            *(handle) = th; \
-        } \
-    } while(0)
-    #define CREATE_TASK_HEAP(fn, name, stack, prio, handle, core) do { \
+    #define CREATE_TASK(fn, name, stack, prio, handle, core) do { \
         if (xTaskCreatePinnedToCore(fn, name, stack, NULL, prio, handle, core) != pdPASS) { \
             LOG_ERROR("INIT", "FAILED to create %s task", name); \
             tasksFail++; \
         } else { tasksOk++; } \
     } while(0)
 
-    // WiFi stays heap (needs large stack for lwIP)
-    CREATE_TASK_HEAP(wifiTask, "WiFi", 6144, PRIORITY_WIFI, &wifiTaskHandle, 0);
-    // Domain tasks use static stacks
-    CREATE_TASK_STATIC(stateTask, "State", 1536, PRIORITY_STATE, &stateTaskHandle, 0);
+    CREATE_TASK(wifiTask, "WiFi", 6144, PRIORITY_WIFI, &wifiTaskHandle, 0);
+    CREATE_TASK(stateTask, "State", 2048, PRIORITY_STATE, &stateTaskHandle, 0);
 
     if (ss_getStatus(ss, "Fingerprint") != ComponentStatus::ERROR) {
-        CREATE_TASK_STATIC(accessTask, "Access", 2560, PRIORITY_ACCESS, &accessTaskHandle, 0);
+        CREATE_TASK(accessTask, "Access", 2560, PRIORITY_ACCESS, &accessTaskHandle, 0);
     }
     if (ss_getStatus(ss, "HX711") != ComponentStatus::ERROR) {
-        CREATE_TASK_STATIC(weightTask, "Weight", 1536, PRIORITY_WEIGHT, &weightTaskHandle, 0);
+        CREATE_TASK(weightTask, "Weight", 1536, PRIORITY_WEIGHT, &weightTaskHandle, 0);
     }
     if (ss_getStatus(ss, "MPU6050") != ComponentStatus::ERROR) {
-        CREATE_TASK_STATIC(motionTask, "Motion", 1536, PRIORITY_MOTION, &motionTaskHandle, 0);
+        CREATE_TASK(motionTask, "Motion", 1536, PRIORITY_MOTION, &motionTaskHandle, 0);
     }
     if (ss_getStatus(ss, "WebServer") == ComponentStatus::OK) {
-        CREATE_TASK_STATIC(webTask, "Web", 2560, PRIORITY_WEB, &webTaskHandle, 0);
+        CREATE_TASK(webTask, "Web", 12288, PRIORITY_WEB, &webTaskHandle, 1);
     }
     if (ss_getStatus(ss, "Display") != ComponentStatus::ERROR) {
-        CREATE_TASK_STATIC(displayTask, "Display", 1536, PRIORITY_DISPLAY, &displayTaskHandle, 1);
+        CREATE_TASK(displayTask, "Display", 1536, PRIORITY_DISPLAY, &displayTaskHandle, 1);
     }
 
     LOG_INFO("INIT", "Tasks created: %d OK, %d failed", tasksOk, tasksFail);

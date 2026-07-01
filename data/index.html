@@ -1,150 +1,580 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
+ <html lang="en">
+  <head>
+   <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inventory Box - Management</title>
-    <link rel="stylesheet" href="/styles.css">
-</head>
-<body>
-    <!-- ERROR BANNER -->
-    <div class="error-banner" id="error-banner">
-        <div class="error-banner-content">
-            <span class="error-banner-icon">⚠</span>
-            <div>
-                <div class="error-banner-text" id="error-title">System Error Detected</div>
-                <div class="error-banner-details" id="error-details">Some components failed</div>
-            </div>
-        </div>
-        <div class="error-banner-actions">
-            <button class="error-banner-btn" onclick="navigateTo('diagnostics')">View Details</button>
+     <title>Inventory Box - Management</title>
+      <link rel="stylesheet" href="/styles.css?v=1">
+     </head>
+     <body>
+      <div class="error-banner" id="error-banner">
+       <div class="error-banner-content">
+        <span class="error-banner-icon">&#9888;</span>
+         <div>
+          <div class="error-banner-text" id="error-title">System Error Detected</div>
+           <div class="error-banner-details" id="error-details">Some components failed</div>
+           </div>
+          </div>
+          <div class="error-banner-actions">
+           <button class="error-banner-btn" onclick="pageManager.navigateTo('diagnostics')">View Details</button>
             <button class="error-banner-btn error-banner-btn-danger" onclick="restartSystem()">Restart</button>
-        </div>
-    </div>
-
-    <div class="app-container">
-        <!-- SIDEBAR -->
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <h1>Inventory Box</h1>
-                <span>ESP32 Management</span>
             </div>
-            
-            <div class="nav-section">System</div>
-            <nav class="sidebar-nav">
+           </div>
+           <div class="app-container">
+            <aside class="sidebar">
+             <div class="sidebar-header">
+              <h1>Inventory Box</h1>
+               <span>ESP32 Management</span>
+               </div>
+               <div class="nav-section">System</div>
+                <nav class="sidebar-nav">
                 <a class="nav-item active" href="#" data-page="dashboard">
-                    <span class="status-dot-small" id="nav-status-dot"></span>Status
-                </a>
+                <span class="status-dot-small" id="nav-status-dot">
+                </span>Status</a>
                 <a class="nav-item" href="#" data-page="tools">Tools</a>
                 <a class="nav-item" href="#" data-page="users">Users</a>
                 <a class="nav-item" href="#" data-page="logs">Logs</a>
                 <a class="nav-item" href="#" data-page="access">Access Control</a>
-            </nav>
-            
-            <div class="nav-section">Settings</div>
-            <nav class="sidebar-nav">
+                </nav>
+                <div class="nav-section">Settings</div>
+                <nav class="sidebar-nav">
                 <a class="nav-item" href="#" data-page="diagnostics">Diagnostics</a>
                 <a class="nav-item" href="#" data-page="config">Configuration</a>
                 <a class="nav-item" href="#" data-page="wifi">WiFi Settings</a>
-            </nav>
-        </aside>
-
-        <!-- MAIN -->
-        <main class="main-content">
-            <!-- TOPBAR -->
-            <header class="topbar">
+                </nav>
+                </aside>
+                <main class="main-content">
+                <header class="topbar">
                 <div class="topbar-left">
-                    <h2 id="page-title">System Status</h2>
-                    <div class="connection-status">
-                        <span class="status-dot" id="connection-dot"></span>
-                        <span id="connection-text">Connecting...</span>
-                    </div>
+                <h2 id="page-title">System Status</h2>
+                <div class="connection-status">
+                <span class="status-dot" id="connection-dot">
+                </span>
+                <span id="connection-text">Connecting...</span>
+                </div>
                 </div>
                 <div class="topbar-right">
-                    <span class="user-info">User: <strong id="user-display">Guest</strong></span>
-                    <button class="btn btn-restart" onclick="restartSystem()">Restart</button>
-                    <button class="btn btn-refresh" onclick="refreshAll()">Refresh</button>
+                <span class="user-info">User: <strong id="user-display">Guest</strong>
+                </span>
+                <button class="btn btn-restart" onclick="restartSystem()">Restart</button>
                 </div>
-            </header>
-
-            <!-- CONTENT AREA (dynamically loaded) -->
-            <div class="content-area" id="content-area">
-                <div class="loading">Loading...</div>
-            </div>
-        </main>
-    </div>
-
-    <!-- MODALS (shared) -->
-    <div class="modal-overlay" id="modal-overlay">
-        <div class="modal">
-            <div class="modal-header" id="modal-title">Modal</div>
-            <div class="modal-body" id="modal-body"></div>
-            <div class="modal-footer" id="modal-footer"></div>
-        </div>
-    </div>
-
-    <!-- TOAST NOTIFICATIONS -->
-    <div class="toast-container" id="toast-container"></div>
-
-    <script src="/app.js"></script>
-    <script>
-        // Page router - loads content dynamically
-        let currentPage = 'dashboard';
-        
-        async function navigateTo(page) {
-            if (currentPage === page) return;
-            
-            currentPage = page;
-            
-            // Update nav active state
-            document.querySelectorAll('.nav-item').forEach(el => {
-                el.classList.toggle('active', el.dataset.page === page);
-            });
-            
-            // Update page title
-            const titles = {
-                'dashboard': 'System Status',
-                'tools': 'Tool Management',
-                'users': 'User Management',
-                'logs': 'Event Logs',
-                'diagnostics': 'Diagnostics',
-                'config': 'Configuration',
-                'wifi': 'WiFi Settings',
-                'access': 'Access Control'
-            };
-            document.getElementById('page-title').textContent = titles[page] || page;
-            
-            // Load content
-            const contentArea = document.getElementById('content-area');
-            contentArea.innerHTML = '<div class="loading">Loading...</div>';
-            
-            try {
-                const response = await fetch(`/pages/${page}.html`);
-                if (response.ok) {
-                    contentArea.innerHTML = await response.text();
-                    // Execute page-specific init
-                    if (typeof window['init_' + page] === 'function') {
-                        window['init_' + page]();
-                    }
-                } else {
-                    contentArea.innerHTML = '<div class="error-state">Page not found</div>';
-                }
-            } catch (err) {
-                contentArea.innerHTML = '<div class="error-state">Failed to load page</div>';
-            }
-        }
-        
-        // Event delegation for navigation
-        document.addEventListener('click', (e) => {
-            const navItem = e.target.closest('.nav-item');
-            if (navItem && navItem.dataset.page) {
-                e.preventDefault();
-                navigateTo(navItem.dataset.page);
-            }
-        });
-        
-        // Initialize dashboard on load
-        navigateTo('dashboard');
-    </script>
-</body>
-</html>
+                </header>
+                <div class="content-area" id="content-area">
+                <div class="modal-overlay" id="modal-overlay">
+                <div class="modal">
+                <div class="modal-header" id="modal-title">Modal</div>
+                <div class="modal-body" id="modal-body">
+                </div>
+                <div class="modal-footer" id="modal-footer">
+                </div>
+                </div>
+                </div>
+                <div class="toast-container" id="toast-container">
+                </div>
+                <div id="page-dashboard" class="page-content" style="display:none">
+                <div class="status-cards">
+                <div class="status-card">
+                <div class="status-card-label">Current Weight</div>
+                <div class="status-card-value success" id="global-weight">-- g</div>
+                <div class="status-card-sub">Delta: <span id="global-delta">--</span>
+                </div>
+                </div>
+                <div class="status-card">
+                <div class="status-card-label">Baseline</div>
+                <div class="status-card-value" id="global-baseline">-- g</div>
+                <div class="status-card-sub">Reference</div>
+                </div>
+                <div class="status-card">
+                <div class="status-card-label">Box Contents</div>
+                <div class="status-card-value" id="global-contents">0</div>
+                <div class="status-card-sub">Items tracked</div>
+                </div>
+                <div class="status-card">
+                <div class="status-card-label">System State</div>
+                <div class="status-card-value" id="global-state">--</div>
+                <div class="status-card-sub">FSM state</div>
+                </div>
+                </div>
+                <div class="quick-actions">
+                <div class="quick-action" onclick="showCalibrateModal()">
+                <div class="quick-action-icon">&#9878;</div>
+                <span>Calibrate</span>
+                </div>
+                <div class="quick-action" onclick="showToast('Refreshed','success')">
+                <div class="quick-action-icon">&#8635;</div>
+                <span>Refresh</span>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Box Contents</div>
+                <div class="card-body">
+                <div class="contents-grid" id="contents-grid">
+                <div class="table-empty">No tools in box</div>
+                </div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">System Info</div>
+                <div class="card-body">
+                <table>
+                <tr>
+                <td style="width:150px;color:var(--text-muted)">Uptime</td>
+                <td id="global-uptime">--</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">Free Heap</td>
+                <td id="global-heap">--</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">WiFi Signal</td>
+                <td id="global-rssi">-- dBm</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">IP Address</td>
+                <td id="global-ip">--</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">FW Version</td>
+                <td>1.0.0</td>
+                </tr>
+                </table>
+                </div>
+                </div>
+                </div>
+                <div id="page-tools" class="page-content" style="display:none">
+                <div class="action-bar">
+                <div class="action-bar-left">
+                <button class="btn btn-primary" onclick="showAddToolModal()">+ Add Tool</button>
+                </div>
+                <div class="action-bar-right">
+                <button class="btn btn-refresh" onclick="loadTools()">Refresh</button>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Registered Tools</div>
+                <div class="card-body no-padding">
+                <table class="table">
+                <thead>
+                <tr>
+                <th style="width:60px">ID</th>
+                <th>Name</th>
+                <th style="width:120px">Weight (g)</th>
+                <th style="width:80px">Tolerance</th>
+                <th style="width:80px">Status</th>
+                <th style="width:150px">Actions</th>
+                </tr>
+                </thead>
+                <tbody id="tools-table">
+                <tr>
+                <td colspan="6" class="table-empty">Loading...</td>
+                </tr>
+                </tbody>
+                </table>
+                </div>
+                </div>
+                </div>
+                <div id="page-users" class="page-content" style="display:none">
+                <div class="card" style="margin-bottom:15px">
+                <div class="card-header">User Login</div>
+                <div class="card-body">
+                <div class="login-inline">
+                <span>Enter PIN:</span>
+                <input type="password" class="form-input form-input-sm" id="login-pin" maxlength="4" placeholder="----">
+                <button class="btn btn-primary" onclick="login()">Login</button>
+                <button class="btn" onclick="logout()" style="margin-left:5px">Logout</button>
+                </div>
+                </div>
+                </div>
+                <div class="action-bar">
+                <div class="action-bar-left">
+                <button class="btn btn-primary" onclick="showAddUserModal()">+ Add User</button>
+                </div>
+                <div class="action-bar-right">
+                <button class="btn btn-refresh" onclick="loadUsers()">Refresh</button>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Registered Users</div>
+                <div class="card-body no-padding">
+                <table class="table">
+                <thead>
+                <tr>
+                <th style="width:60px">ID</th>
+                <th>Name</th>
+                <th style="width:80px">FP ID</th>
+                <th style="width:80px">Status</th>
+                <th style="width:150px">Actions</th>
+                </tr>
+                </thead>
+                <tbody id="users-table">
+                <tr>
+                <td colspan="5" class="table-empty">Loading...</td>
+                </tr>
+                </tbody>
+                </table>
+                </div>
+                </div>
+                </div>
+                <div id="page-logs" class="page-content" style="display:none">
+                <div class="action-bar">
+                <div class="action-bar-left">
+                <button class="btn btn-refresh" onclick="loadLogs()">Refresh</button>
+                <button class="btn" onclick="downloadLogs()">Download CSV</button>
+                <button class="btn btn-danger" onclick="clearLogs()">Clear Logs</button>
+                </div>
+                <div class="action-bar-right">
+                <select class="form-input form-input-sm" id="log-limit" onchange="loadLogs()" style="width:100px">
+                <option value="50">50 rows</option>
+                <option value="100" selected>100 rows</option>
+                <option value="200">200 rows</option>
+                <option value="500">500 rows</option>
+                </select>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Event Logs <span id="log-count" style="font-weight:normal;font-size:11px;color:var(--text-muted)">
+                </span>
+                </div>
+                <div class="card-body no-padding">
+                <table class="table">
+                <thead>
+                <tr>
+                <th style="width:160px">Time</th>
+                <th style="width:80px">Level</th>
+                <th style="width:100px">Tag</th>
+                <th>Message</th>
+                </tr>
+                </thead>
+                <tbody id="logs-table">
+                <tr>
+                <td colspan="4" class="table-empty">Loading...</td>
+                </tr>
+                </tbody>
+                </table>
+                </div>
+                </div>
+                </div>
+                <div id="page-diagnostics" class="page-content" style="display:none">
+                <div class="card">
+                <div class="card-header">System Status <span id="diag-status-badge" class="badge badge-success">OK</span>
+                </div>
+                <div class="card-body no-padding">
+                <table class="table diag-table">
+                <tbody id="diagnostics-list">
+                <tr>
+                <td colspan="3" class="table-empty">Loading diagnostics...</td>
+                </tr>
+                </tbody>
+                </table>
+                </div>
+                </div>
+                <div class="stats-grid">
+                <div class="stat-item">
+                <div class="stat-value" id="diag-uptime">--</div>
+                <div class="stat-label">Uptime</div>
+                </div>
+                <div class="stat-item">
+                <div class="stat-value" id="diag-total-errors">0</div>
+                <div class="stat-label">Total Errors</div>
+                </div>
+                <div class="stat-item">
+                <div class="stat-value" id="diag-last-error-status">--</div>
+                <div class="stat-label">Last Error</div>
+                </div>
+                </div>
+                <div class="card" style="margin-top:15px">
+                <div class="card-header">Error Details</div>
+                <div class="card-body">
+                <p id="diag-last-error" style="color:var(--text-muted)">No errors</p>
+                </div>
+                </div>
+                <div class="restart-section">
+                <p>If the system is not responding or showing errors, you can restart it.</p>
+                <p style="font-size:11px;color:var(--text-muted);margin-bottom:15px">This will disconnect all active connections and reboot the device.</p>
+                <button class="btn-restart-large" onclick="restartSystem()">Restart System</button>
+                </div>
+                </div>
+                <div id="page-config" class="page-content" style="display:none">
+                <div class="card">
+                <div class="card-header">Sensor Configuration</div>
+                <div class="card-body">
+                <div class="form-row">
+                <div class="form-row-label">Weight Threshold</div>
+                <input type="number" class="form-input form-row-input" id="cfg-threshold" value="2.0" step="0.1">
+                <span class="form-row-suffix">grams</span>
+                </div>
+                <div class="form-row">
+                <div class="form-row-label">Settling Time</div>
+                <input type="number" class="form-input form-row-input" id="cfg-settling" value="3000">
+                <span class="form-row-suffix">ms</span>
+                </div>
+                <div class="form-row">
+                <div class="form-row-label">Motion Threshold</div>
+                <input type="number" class="form-input form-row-input" id="cfg-motion" value="0.15" step="0.01">
+                <span class="form-row-suffix">G</span>
+                </div>
+                <div style="margin-top:15px">
+                <button class="btn btn-primary" onclick="saveSensorConfig()">Save Sensor Settings</button>
+                </div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Power Management</div>
+                <div class="card-body">
+                <div class="form-row">
+                <div class="form-row-label">Light Sleep After</div>
+                <input type="number" class="form-input form-row-input" id="cfg-lightsleep" value="30">
+                <span class="form-row-suffix">seconds</span>
+                </div>
+                <div class="form-row">
+                <div class="form-row-label">Deep Sleep After</div>
+                <input type="number" class="form-input form-row-input" id="cfg-deepsleep" value="60">
+                <span class="form-row-suffix">seconds</span>
+                </div>
+                <div style="margin-top:15px">
+                <button class="btn btn-primary" onclick="savePowerConfig()">Save Power Settings</button>
+                </div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Matching Settings</div>
+                <div class="card-body">
+                <div class="form-row">
+                <div class="form-row-label">Default Tolerance</div>
+                <input type="number" class="form-input form-row-input" id="cfg-tolerance" value="2.0" step="0.1">
+                <span class="form-row-suffix">grams</span>
+                </div>
+                <div class="form-row">
+                <div class="form-row-label">Max Contents</div>
+                <input type="number" class="form-input form-row-input" id="cfg-maxcontents" value="10">
+                <span class="form-row-suffix">items</span>
+                </div>
+                <div style="margin-top:15px">
+                <button class="btn btn-primary" onclick="saveMatchingConfig()">Save Matching Settings</button>
+                </div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Factory Reset</div>
+                <div class="card-body">
+                <p style="margin-bottom:15px;color:var(--text-muted)">This will delete all tools, users, and logs. Use with caution.</p>
+                <button class="btn btn-danger" onclick="factoryReset()">Factory Reset</button>
+                </div>
+                </div>
+                </div>
+                <div id="page-wifi" class="page-content" style="display:none">
+                <div class="card">
+                <div class="card-header">Configure WiFi</div>
+                <div class="card-body">
+                <div class="form-group">
+                <label class="form-label">WiFi Network (SSID)</label>
+                <input type="text" class="form-input" id="wifi-ssid" placeholder="Enter network name">
+                </div>
+                <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-input" id="wifi-pass" placeholder="Enter password">
+                </div>
+                <div style="margin-top:15px">
+                <button class="btn btn-primary" onclick="saveWifi()">Save &amp; Connect</button>
+                <button class="btn" onclick="scanNetworks()">Scan Networks</button>
+                </div>
+                </div>
+                </div>
+                <div class="card" id="scan-results-card" style="display:none">
+                <div class="card-header">Available Networks <button class="btn btn-sm" onclick="document.getElementById('scan-results-card').style.display='none'">Close</button>
+                </div>
+                <div class="card-body no-padding">
+                <div id="scan-results" class="table-empty">Scanning...</div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Current Connection</div>
+                <div class="card-body">
+                <table>
+                <tr>
+                <td style="width:150px;color:var(--text-muted)">Status</td>
+                <td>
+                <span class="wifi-status" id="wifi-status-display">
+                <span class="wifi-icon">&#8226;</span>
+                <span id="wifi-status-text">Checking...</span>
+                </span>
+                </td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">SSID</td>
+                <td id="wifi-current-ssid">--</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">Signal Strength</td>
+                <td id="wifi-current-rssi">-- dBm</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">IP Address</td>
+                <td id="wifi-current-ip">--</td>
+                </tr>
+                </table>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Access Point Mode</div>
+                <div class="card-body">
+                <p style="margin-bottom:15px;color:var(--text-muted)">If WiFi connection fails, the device will create an access point.</p>
+                <table>
+                <tr>
+                <td style="width:150px;color:var(--text-muted)">AP SSID</td>
+                <td>Inventory-Box-Setup</td>
+                </tr>
+                <tr>
+                <td style="color:var(--text-muted)">AP IP</td>
+                <td>192.168.4.1</td>
+                </tr>
+                </table>
+                </div>
+                </div>
+                </div>
+                <div id="page-access" class="page-content" style="display:none">
+                <div class="status-cards">
+                <div class="status-card">
+                <div class="status-card-label">Access State</div>
+                <div class="status-card-value" id="access-state">idle</div>
+                <div class="status-card-sub" id="access-last-event">--</div>
+                </div>
+                <div class="status-card">
+                <div class="status-card-label">Door</div>
+                <div class="status-card-value" id="access-door-state">--</div>
+                <div class="status-card-sub" id="access-door-detail">--</div>
+                </div>
+                <div class="status-card">
+                <div class="status-card-label">Server</div>
+                <div class="status-card-value" id="access-server-status">--</div>
+                <div class="status-card-sub" id="access-server-detail">--</div>
+                </div>
+                <div class="status-card">
+                <div class="status-card-label">Last Fingerprint</div>
+                <div class="status-card-value" id="access-last-fp">--</div>
+                <div class="status-card-sub" id="access-fallback-status">Local fallback: --</div>
+                </div>
+                </div>
+                <div class="quick-actions">
+                <div class="quick-action" onclick="accessUnlock()">
+                <div class="quick-action-icon">&#128274;</div>
+                <span>Unlock</span>
+                </div>
+                <div class="quick-action" onclick="accessRefresh()">
+                <div class="quick-action-icon">&#8635;</div>
+                <span>Refresh</span>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Fingerprint Enrollment</div>
+                <div class="card-body">
+                <div id="enroll-status">
+                <p style="color:var(--text-muted);margin-bottom:15px">Assign a fingerprint slot. Place finger when prompted.</p>
+                <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+                <div>
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">FP ID (1-127)</label>
+                <input type="number" id="enroll-fp-id" min="1" max="127" value="1" style="width:100px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius)">
+                </div>
+                <div>
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Link User</label>
+                <select id="enroll-user-id" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius)">
+                <option value="-1">No user</option>
+                </select>
+                </div>
+                <div>
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">&nbsp;</label>
+                <button class="btn" onclick="accessShowAddUser()" style="font-size:11px;padding:4px 10px">+ New User</button>
+                </div>
+                <div>
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">&nbsp;</label>
+                <button class="btn btn-primary" id="btn-enroll-start" onclick="accessEnroll()">Start Enrollment</button>
+                <button class="btn" id="btn-enroll-cancel" onclick="accessEnrollCancel()" style="display:none">Cancel</button>
+                </div>
+                </div>
+                <div id="enroll-progress" style="margin-top:12px;display:none">
+                <div style="display:flex;gap:6px;align-items:center">
+                <span style="font-size:12px" id="enroll-message">Place finger on sensor...</span>
+                </div>
+                <div style="background:var(--border-light);border-radius:3px;height:6px;margin-top:8px;overflow:hidden">
+                <div id="enroll-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.5s">
+                </div>
+                </div>
+                </div>
+                <div id="enroll-result" style="margin-top:10px;display:none">
+                </div>
+                </div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Server Configuration</div>
+                <div class="card-body">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+                <div style="flex:1;min-width:200px">
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Server URL</label>
+                <input type="text" id="cfg-server-url" placeholder="http://192.168.1.100:3000" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius)">
+                </div>
+                <div style="flex:1;min-width:200px">
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Auth Token</label>
+                <input type="password" id="cfg-server-token" placeholder="Bearer token (optional)" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius)">
+                </div>
+                <div>
+                <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">&nbsp;</label>
+                <button class="btn btn-primary" onclick="accessSaveServer()">Save</button>
+                <button class="btn" onclick="accessTestServer()">Test</button>
+                </div>
+                </div>
+                <div style="margin-top:12px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="cfg-local-fallback" checked onchange="accessSaveFallback(this.checked)">
+                <span style="font-size:13px">Local fallback</span>
+                </label>
+                </div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">User &rarr; Fingerprint Mapping</div>
+                <div class="card-body">
+                <div class="table-empty" id="access-user-mapping">Loading users...</div>
+                </div>
+                </div>
+                <div class="card">
+                <div class="card-header">Access Log</div>
+                <div class="card-body">
+                <div style="overflow-x:auto">
+                <table>
+                <thead>
+                <tr>
+                <th style="width:80px">Decision</th>
+                <th style="width:60px">FP ID</th>
+                <th>User</th>
+                <th>Reason</th>
+                <th style="width:140px">Time</th>
+                </tr>
+                </thead>
+                <tbody id="access-log-table">
+                <tr>
+                <td colspan="5" class="table-empty">Loading...</td>
+                </tr>
+                </tbody>
+                </table>
+                </div>
+                <div id="access-log-dropped" style="font-size:11px;color:var(--text-muted);margin-top:8px">
+                </div>
+                </div>
+                </div>
+                </div>
+                <script src="/app.js?v=5">
+                </script>
+                <script>function init_dashboard(){loadContents()}async function loadContents(){try{var t=await API.get("/status"),a=document.getElementById("contents-grid");if(!a)return;t.contentsList&&t.contentsList.length>0?a.innerHTML=t.contentsList.map(function(t){return'<div class="content-item"> <div class="content-item-name">'+t.n+'</div> <div class="content-item-weight">'+t.w.toFixed(1)+" g</div> </div>"}).join(""):a.innerHTML='<div class="table-empty">No tools in box</div>'}catch(t){console.error(t)}}function showCalibrateModal(){showModal("Calibrate Scale",'<p style="margin-bottom:15px">Place empty box on scale, click "Start Calibration".</p>','<button class="btn" onclick="hideModal()">Cancel</button> <button class="btn btn-primary" onclick="calibrate()">Start Calibration</button>')}async function calibrate(){hideModal();try{var t=await API.post("/calibrate",{});showToast("Calibrated! Baseline: "+t.baseline.toFixed(2)+" g","success")}catch(t){showToast("Calibration failed","error")}}pageManager.registerPage("dashboard",{init:init_dashboard,onStatus:function(t){loadContents()}});</script>
+                <script>function init_tools(){loadTools()}async function loadTools(){try{var o=await API.get("/tools"),t=document.getElementById("tools-table");if(!o.tl||!o.tl.length)return void(t.innerHTML='<tr> <td colspan="6" class="table-empty">No tools registered</td> </tr>');t.innerHTML=o.tl.map(function(o){return"<tr> <td>"+o.i+"</td> <td>"+o.n+"</td> <td>"+o.w.toFixed(1)+"</td> <td>&plusmn;"+(o.tol||2).toFixed(1)+'</td> <td> <span class="badge '+(o.act?"badge-success":"badge-muted")+'">'+(o.act?"Active":"Inactive")+'</span> </td> <td> <button class="btn btn-sm" onclick="editTool('+o.i+",'"+o.n.replace(/'/g,"\\'")+"',"+o.w+')">Edit</button> <button class="btn btn-sm btn-danger" onclick="deleteTool('+o.i+')">Delete</button> </td> </tr>'}).join("")}catch(o){document.getElementById("tools-table").innerHTML='<tr> <td colspan="6" class="table-empty">Failed to load</td> </tr>'}}function showAddToolModal(){showModal("Add New Tool",'<div class="form-group"> <label class="form-label">Name</label> <input type="text" class="form-input" id="tool-name" placeholder="Tool name"> </div> <div class="form-group"> <label class="form-label">Weight (g)</label> <input type="number" class="form-input" id="tool-weight" step="0.1" placeholder="0.0"> </div> <div class="form-group"> <label class="form-label">Tolerance</label> <input type="number" class="form-input" id="tool-tolerance" step="0.1" value="2.0"> </div>','<button class="btn" onclick="hideModal()">Cancel</button> <button class="btn btn-primary" onclick="createTool()">Add Tool</button>')}async function createTool(){var o=document.getElementById("tool-name").value.trim(),t=parseFloat(document.getElementById("tool-weight").value),e=parseFloat(document.getElementById("tool-tolerance").value)||2;if(o&&!isNaN(t))try{await API.post("/tools",{name:o,weight:t,tolerance:e}),hideModal(),showToast("Tool added","success"),loadTools()}catch(o){showToast("Failed","error")}else showToast("Fill all fields","error")}function editTool(o,t,e){showModal("Edit Tool",'<input type="hidden" id="edit-tool-id" value="'+o+'"> <div class="form-group"> <label class="form-label">Name</label> <input type="text" class="form-input" id="edit-tool-name" value="'+t+'"> </div> <div class="form-group"> <label class="form-label">Weight</label> <input type="number" class="form-input" id="edit-tool-weight" step="0.1" value="'+e+'"> </div>','<button class="btn" onclick="hideModal()">Cancel</button> <button class="btn btn-primary" onclick="updateTool()">Update</button>')}async function updateTool(){var o=document.getElementById("edit-tool-id").value,t=document.getElementById("edit-tool-name").value.trim(),e=parseFloat(document.getElementById("edit-tool-weight").value);if(t&&!isNaN(e))try{await API.put("/tools/"+o,{name:t,weight:e}),hideModal(),showToast("Tool updated","success"),loadTools()}catch(o){showToast("Failed","error")}else showToast("Fill all fields","error")}async function deleteTool(o){if(!confirm("Delete this tool?"))return;try{await API.delete("/tools/"+o),showToast("Tool deleted","success"),loadTools()}catch(e){showToast("Failed","error")}}async function doDeleteTool(o){try{await API.delete("/tools/"+o),showToast("Tool deleted","success"),loadTools()}catch(o){showToast("Failed","error")}}pageManager.registerPage("tools",{init:init_tools}),window.loadTools=loadTools,window.showAddToolModal=showAddToolModal,window.createTool=createTool,window.editTool=editTool,window.updateTool=updateTool,window.deleteTool=deleteTool;</script>
+                <script>function init_users(){loadUsers()}async function loadUsers(){try{var e=await API.get("/users"),t=document.getElementById("users-table");if(!e.us||!e.us.length)return void(t.innerHTML='<tr> <td colspan="5" class="table-empty">No users registered</td> </tr>');t.innerHTML=e.us.map(function(e){return"<tr> <td>"+e.i+"</td> <td>"+e.n+"</td> <td>"+(e.fp>0?'<span style="color:var(--success)">#'+e.fp+"</span>":'<span style="color:var(--text-muted)">--</span>')+'</td> <td> <span class="badge '+(e.act?"badge-success":"badge-muted")+'">'+(e.act?"Active":"Inactive")+'</span> </td> <td> <button class="btn btn-sm" onclick="editUser('+e.i+')">Edit</button> <button class="btn btn-sm btn-danger" onclick="deleteUser('+e.i+')">Delete</button> </td> </tr>'}).join("")}catch(e){document.getElementById("users-table").innerHTML='<tr> <td colspan="5" class="table-empty">Failed to load</td> </tr>'}}async function login(){var e=document.getElementById("login-pin").value;if(4===e.length)try{var t=await API.post("/users/login",{pin:e});t.success?(document.getElementById("user-display").textContent=t.n,document.getElementById("login-pin").value="",showToast("Logged in as "+t.n,"success")):showToast("Invalid PIN","error")}catch(e){showToast("Login failed","error")}else showToast("PIN must be 4 digits","warning")}async function logout(){try{await API.post("/users/logout"),document.getElementById("user-display").textContent="Not logged in",document.getElementById("login-pin").value="",showToast("Logged out","success")}catch(e){showToast("Logout failed","error")}}function showAddUserModal(){showModal("Add New User",'<div class="form-group"> <label class="form-label">Name</label> <input type="text" class="form-input" id="user-name" placeholder="User name"> </div> <div class="form-group"> <label class="form-label">PIN (4 digits)</label> <input type="password" class="form-input form-input-sm" id="user-pin" maxlength="4" placeholder="----"> </div> <div class="form-group"> <label class="form-label">Fingerprint ID</label> <input type="number" class="form-input form-input-sm" id="user-fpid" min="1" max="127" placeholder="Optional"> </div>','<button class="btn" onclick="hideModal()">Cancel</button> <button class="btn btn-primary" onclick="createUser()">Add User</button>')}async function createUser(){var e=document.getElementById("user-name").value.trim(),t=document.getElementById("user-pin").value,s=document.getElementById("user-fpid").value,a=s?parseInt(s):-1;if(e&&4===t.length)try{await API.post("/users",a>0?{name:e,pin:t,fpId:a}:{name:e,pin:t}),hideModal(),showToast("User added","success"),loadUsers()}catch(e){showToast("Failed","error")}else showToast("Name required, PIN 4 digits","error")}async function editUser(e){try{var t=await API.get("/users/"+e);showModal("Edit User",'<div class="form-group"> <label class="form-label">Name</label> <input type="text" class="form-input" id="edit-name" value="'+(t.n||"")+'"> </div> <div class="form-group"> <label class="form-label">PIN</label> <input type="password" class="form-input form-input-sm" id="edit-pin" maxlength="4" placeholder="Leave empty to keep"> </div> <div class="form-group"> <label class="form-label">FP ID</label> <input type="number" class="form-input form-input-sm" id="edit-fpid" min="1" max="127" value="'+(t.fp>0?t.fp:"")+'" placeholder="'+(t.fp>0?"Current: #"+t.fp:"Not assigned")+'"> </div>','<button class="btn" onclick="hideModal()">Cancel</button> <button class="btn btn-primary" onclick="doEditUser('+e+')">Save</button>')}catch(e){showToast("Failed to load user","error")}}async function doEditUser(e){var t=document.getElementById("edit-name").value.trim(),s=document.getElementById("edit-pin").value,a=document.getElementById("edit-fpid").value,n={};t&&(n.n=t),s&&(n.pin=s),a&&(n.fp=parseInt(a));try{await API.put("/users/"+e,n),hideModal(),showToast("User updated","success"),loadUsers()}catch(e){showToast("Failed","error")}}async function deleteUser(e){showConfirm("Delete User","Delete user?","doDeleteUser("+e+")")}async function doDeleteUser(e){try{await API.delete("/users/"+e),showToast("User deleted","success"),loadUsers()}catch(e){showToast("Failed","error")}}pageManager.registerPage("users",{init:init_users}),window.loadUsers=loadUsers,window.showAddUserModal=showAddUserModal,window.createUser=createUser,window.login=login;</script>
+                <script>function init_logs(){loadLogs()}var LVL_N=["NONE","ERROR","WARN","INFO","DEBUG"],LVL_C=["muted","danger","warning","success","info"];async function loadLogs(){var t=document.getElementById("log-limit")&&document.getElementById("log-limit").value||100;try{var o=await API.get("/logs?limit="+t),e=document.getElementById("logs-table");if(!o.lg||!o.lg.length)return void(e.innerHTML='<tr> <td colspan="4" class="table-empty">No logs</td> </tr>');document.getElementById("log-count").textContent="Total: "+(o.total||0)+" | Dropped: "+(o.dropped||0)+" | Size: "+formatBytes(o.fileSize||0),e.innerHTML=o.lg.map(function(t){return"<tr> <td>"+formatDate(t.ts)+'</td> <td> <span class="badge badge-'+(LVL_C[t.level]||"muted")+'">'+(LVL_N[t.level]||"?")+'</span> </td> <td> <span class="badge badge-light">'+(t.tag||"--")+"</span> </td> <td>"+(t.msg||"--")+"</td> </tr>"}).join("")}catch(t){document.getElementById("logs-table").innerHTML='<tr> <td colspan="4" class="table-empty">Failed</td> </tr>'}}function formatLogDetails(t){var o=[];return t.tid&&o.push("Tool #"+t.tid),t.uid&&o.push("User #"+t.uid),t.w&&o.push(t.w.toFixed(1)+"g"),o.join(" | ")||"--"}function downloadLogs(){window.open("/api/logs/download","_blank")}async function clearLogs(){if(confirm("Delete all logs?"))try{await API.post("/logs/clear"),showToast("Cleared","success"),loadLogs()}catch(t){showToast("Failed","error")}}pageManager.registerPage("logs",{init:init_logs}),window.loadLogs=loadLogs,window.downloadLogs=downloadLogs,window.clearLogs=clearLogs;</script>
+                <script>function init_diagnostics(){}pageManager.registerPage("diagnostics",{init:init_diagnostics});</script>
+                <script>function init_config(){loadConfig()}async function loadConfig(){try{await API.get("/config")}catch(e){}}async function saveSensorConfig(){try{await API.post("/config",{threshold:parseFloat(document.getElementById("cfg-threshold").value),settlingTime:parseInt(document.getElementById("cfg-settling").value),motionThreshold:parseFloat(document.getElementById("cfg-motion").value)}),showToast("Sensor settings saved","success")}catch(e){showToast("Failed","error")}}async function savePowerConfig(){try{await API.post("/config",{lightSleepTimeout:1e3*parseInt(document.getElementById("cfg-lightsleep").value),deepSleepTimeout:1e3*parseInt(document.getElementById("cfg-deepsleep").value)}),showToast("Power settings saved","success")}catch(e){showToast("Failed","error")}}async function saveMatchingConfig(){try{await API.post("/config",{defaultTolerance:parseFloat(document.getElementById("cfg-tolerance").value),maxContents:parseInt(document.getElementById("cfg-maxcontents").value)}),showToast("Matching settings saved","success")}catch(e){showToast("Failed","error")}}async function factoryReset(){showConfirm("Factory Reset","Delete ALL data? This cannot be undone!","doFactoryReset")}async function doFactoryReset(){try{await API.post("/config",{factoryReset:!0}),showToast("Factory reset complete. Restarting...","success"),setTimeout(function(){fetch(API_BASE+"/restart",{method:"POST"})},1e3)}catch(e){showToast("Failed","error")}}pageManager.registerPage("config",{init:init_config});</script>
+                <script>function init_wifi(){loadWifiStatus()}async function loadWifiStatus(){try{var t=await API.get("/wifi"),e=document.getElementById("wifi-status-display"),n=document.getElementById("wifi-status-text");t.c?(e.classList.add("connected"),e.classList.remove("disconnected"),n.textContent="Connected",e.querySelector(".wifi-icon").textContent="✓"):t.a?(e.classList.add("disconnected"),e.classList.remove("connected"),n.textContent="AP Mode",e.querySelector(".wifi-icon").textContent="🔗"):(e.classList.add("disconnected"),e.classList.remove("connected"),n.textContent="Disconnected",e.querySelector(".wifi-icon").textContent="✗"),document.getElementById("wifi-current-ssid").textContent=t.ss||"--",document.getElementById("wifi-current-rssi").textContent=(t.rss||"--")+" dBm",document.getElementById("wifi-current-ip").textContent=t.ip||"--"}catch(t){console.error(t)}}async function saveWifi(){var t=document.getElementById("wifi-ssid").value.trim(),e=document.getElementById("wifi-pass").value;if(t)try{await API.post("/wifi",{ssid:t,password:e}),showToast("WiFi saved. Reconnecting...","success"),document.getElementById("wifi-pass").value="",setTimeout(loadWifiStatus,3e3)}catch(t){showToast("Failed","error")}else showToast("Enter SSID","warning")}async function scanNetworks(){var t=document.getElementById("scan-results-card"),e=document.getElementById("scan-results");t.style.display="block",e.innerHTML='<div class="table-empty">Scanning...</div>';try{var n=await(await fetch("/scan")).json();if(!n.networks||!n.networks.length)return void(e.innerHTML='<div class="table-empty">No networks</div>');e.innerHTML='<table class="table"> <tbody>'+n.networks.map(function(t){return'<tr style="cursor:pointer" onclick="selectNetwork(\''+t.ssid+'\')"> <td style="width:200px">'+t.ssid+"</td> <td>"+t.rssi+' dBm</td> <td> <button class="btn btn-sm">Select</button> </td> </tr>'}).join("")+"</tbody> </table>"}catch(t){e.innerHTML='<div class="table-empty">Scan failed</div>'}}function selectNetwork(t){document.getElementById("wifi-ssid").value=t,document.getElementById("wifi-pass").focus(),document.getElementById("scan-results-card").style.display="none",showToast("Selected: "+t,"info")}pageManager.registerPage("wifi",{init:init_wifi}),window.loadWifiStatus=loadWifiStatus,window.saveWifi=saveWifi,window.scanNetworks=scanNetworks,window.selectNetwork=selectNetwork;</script>
+                <script>function init_access(){accessLoadConfig(),accessLoadUsers(),accessLoadLogs()}async function accessRefresh(){}async function accessUnlock(){try{(await API.post("/door/unlock")).success?showToast("Door unlocking...","success"):showToast("Unlock failed","warning")}catch(e){showToast("Unlock failed: "+e.message,"error")}}async function accessShowAddUser(){showModal("Quick Add User",'<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Create a user first, then enroll their fingerprint.</p> <div class="form-group"> <label class="form-label">Name</label> <input type="text" class="form-input" id="aq-name" placeholder="User name"> </div> <div class="form-group"> <label class="form-label">PIN (4 digits)</label> <input type="password" class="form-input form-input-sm" id="aq-pin" maxlength="4" placeholder="----"> </div>','<button class="btn" onclick="hideModal()">Cancel</button> <button class="btn btn-primary" onclick="accessQuickAddUser()">Add &amp; Enroll</button>')}async function accessQuickAddUser(){var e=document.getElementById("aq-name").value.trim(),t=document.getElementById("aq-pin").value;if(e&&4===t.length)try{var s=await API.post("/users",{name:e,pin:t});if(s.success){await accessLoadUsers();for(var n=document.getElementById("enroll-user-id"),a=0;a<n.options.length;a++)if(n.options[a].value==s.i){n.selectedIndex=a;break}hideModal(),showToast('User "'+e+'" created. Now enroll fingerprint.',"success")}}catch(e){showToast("Failed: "+e.message,"error")}else showToast("Name required, PIN 4 digits","error")}async function accessEnroll(){var e=parseInt(document.getElementById("enroll-fp-id").value);if(!e||e<1||e>127)showToast("Enter FP ID 1-127","error");else{var t=parseInt(document.getElementById("enroll-user-id").value);try{(await API.post("/fingerprint/enroll",t>0?{fpId:e,userId:t}:{fpId:e})).success?(document.getElementById("btn-enroll-start").style.display="none",document.getElementById("btn-enroll-cancel").style.display="inline-block",document.getElementById("enroll-progress").style.display="block",document.getElementById("enroll-result").style.display="none",document.getElementById("enroll-message").textContent="Place finger on sensor...",document.getElementById("enroll-bar").style.width="25%",accessPollEnroll()):showToast("Enrollment failed to start","error")}catch(e){showToast("Enrollment error: "+e.message,"error")}}}function accessEnrollCancel(){document.getElementById("btn-enroll-start").style.display="inline-block",document.getElementById("btn-enroll-cancel").style.display="none",document.getElementById("enroll-progress").style.display="none",showToast("Enrollment cancelled","info")}async function accessPollEnroll(){try{var e=await API.get("/fingerprint/enroll/status");"waiting"===e.sn?(document.getElementById("enroll-message").textContent="Place finger...",document.getElementById("enroll-bar").style.width="25%",setTimeout(accessPollEnroll,500)):"second_capture"===e.sn?(document.getElementById("enroll-message").textContent="Remove, then place again...",document.getElementById("enroll-bar").style.width="60%",setTimeout(accessPollEnroll,500)):"complete"===e.sn?(document.getElementById("enroll-message").textContent="Enrolled!",document.getElementById("enroll-bar").style.width="100%",document.getElementById("enroll-result").style.display="block",document.getElementById("enroll-result").innerHTML='<span style="color:var(--success);font-size:12px">FP #'+e.fp+" enrolled!</span>",document.getElementById("btn-enroll-start").style.display="inline-block",document.getElementById("btn-enroll-cancel").style.display="none",showToast("FP #"+e.fp+" enrolled","success"),accessLoadUsers()):"failed"===e.sn?(document.getElementById("enroll-message").textContent="Failed",document.getElementById("enroll-bar").style.width="0%",document.getElementById("enroll-result").style.display="block",document.getElementById("enroll-result").innerHTML='<span style="color:var(--danger);font-size:12px">Failed - try again</span>',document.getElementById("btn-enroll-start").style.display="inline-block",document.getElementById("btn-enroll-cancel").style.display="none",showToast("Enrollment failed","error")):(document.getElementById("btn-enroll-start").style.display="inline-block",document.getElementById("btn-enroll-cancel").style.display="none",document.getElementById("enroll-progress").style.display="none")}catch(e){setTimeout(accessPollEnroll,1e3)}}async function accessLoadConfig(){try{var e=await API.get("/access/server");document.getElementById("cfg-server-url").value=e.serverUrl||"",document.getElementById("cfg-server-token").value="",document.getElementById("cfg-local-fallback").checked=!1!==e.localFallback}catch(e){}}async function accessSaveServer(){try{await API.post("/access/server",{serverUrl:document.getElementById("cfg-server-url").value.trim(),serverToken:document.getElementById("cfg-server-token").value.trim(),localFallback:document.getElementById("cfg-local-fallback").checked}),showToast("Server config saved","success")}catch(e){showToast("Save failed","error")}}async function accessSaveFallback(e){try{await API.post("/access/server",{serverUrl:document.getElementById("cfg-server-url").value.trim(),serverToken:"",localFallback:e}),showToast("Fallback "+(e?"enabled":"disabled"),"success")}catch(e){}}async function accessTestServer(){var e=document.getElementById("cfg-server-url").value.trim();if(e){showToast("Testing...","info");try{await API.post("/access/server",{serverUrl:e,serverToken:document.getElementById("cfg-server-token").value.trim(),localFallback:document.getElementById("cfg-local-fallback").checked}),showToast("Config saved. Check status.","success")}catch(e){showToast("Test failed: "+e.message,"error")}}else showToast("Enter URL first","warning")}async function accessLoadUsers(){try{var e=await API.get("/users"),t=document.getElementById("access-user-mapping"),s=document.getElementById("enroll-user-id");if(s.innerHTML='<option value="-1">No user</option>',e.us&&e.us.forEach(function(e){var t=document.createElement("option");t.value=e.i,t.textContent=e.n+(e.fp>0?" (FP #"+e.fp+")":""),s.appendChild(t)}),!e.us||!e.us.length)return void(t.innerHTML='<div class="table-empty">No users</div>');t.innerHTML="<table> <thead> <tr> <th>User</th> <th>Status</th> <th>FP ID</th> <th>Action</th> </tr> </thead> <tbody>"+e.us.map(function(e){return"<tr> <td>"+e.n+'</td> <td> <span class="badge badge-'+(e.act?"success":"danger")+'">'+(e.act?"Active":"Inactive")+"</span> </td> <td>"+(e.fp>0?'<span style="color:var(--success)">#'+e.fp+"</span>":'<span style="color:var(--text-muted)">--</span>')+"</td> <td>"+(e.fp>0?'<button class="btn" onclick="accessDeleteFingerprint('+e.fp+","+e.i+')" style="font-size:11px;padding:2px 8px">Delete FP</button>':'<button class="btn" onclick="accessShowAssignFp('+e.i+')" style="font-size:11px;padding:2px 8px">Assign FP</button>')+"</td> </tr>"}).join("")+"</tbody> </table>"}catch(e){console.error(e)}}async function accessShowAssignFp(e){var t=prompt("Enter FP ID (1-127):");if(t){var s=parseInt(t);if(s<1||s>127)showToast("FP ID 1-127","error");else try{await API.put("/users/"+e,{fpId:s}),showToast("FP #"+s+" assigned","success"),accessLoadUsers()}catch(e){showToast("Failed","error")}}}async function accessDeleteFingerprint(e,t){if(e&&!(e<=0)&&confirm("Delete FP #"+e+"?"))try{await API.post("/fingerprint/delete",{fpId:e}),t>0&&await API.put("/users/"+t,{fpId:-1}),showToast("FP #"+e+" deleted","success"),accessLoadUsers()}catch(e){showToast("Failed","error")}}async function accessLoadLogs(){try{var e=await API.get("/logs?limit=30"),t=document.getElementById("access-log-table");if(!e.lg||!e.lg.length)return void(t.innerHTML='<tr> <td colspan="5" class="table-empty">No events</td> </tr>');var s=e.lg.filter(function(e){return"ACCESS"===e.tag||"DOOR"===e.tag||"FINGERPRINT"===e.tag||"SERVER"===e.tag});if(!s.length)return void(t.innerHTML='<tr> <td colspan="5" class="table-empty">No access events</td> </tr>');t.innerHTML=s.map(function(e){return'<tr> <td> <span class="badge badge-'+((e.msg&&e.msg.indexOf("GRANTED")>=0?"success":e.msg&&(e.msg.indexOf("DENIED")>=0||e.msg.indexOf("UNREACHABLE")>=0)?"danger":e.msg&&e.msg.indexOf("LOCAL")>=0?"warning":"")||"info")+'">'+(e.msg?e.msg.split(" ")[0]:e.tag)+'</span> </td> <td style="color:var(--text-muted)">'+(e.msg||"--")+"</td> <td>"+(e.userId||"--")+'</td> <td style="font-size:12px;color:var(--text-secondary)">'+(e.msg||e.tag)+'</td> <td style="font-size:11px;color:var(--text-muted)">'+formatDate(e.ts)+"</td> </tr>"}).join("")}catch(e){console.error(e)}}pageManager.registerPage("access",{init:init_access,onAccess:function(e){var t=document.getElementById("access-state");t&&(t.textContent=e.state||"--",t.className="status-card-value","granted"===e.state||"unlocking"===e.state||"unlocked"===e.state?t.classList.add("success"):"denied"===e.state&&t.classList.add("error"));var s=document.getElementById("access-door-state");if(s){var n="unknown",a="";"locked"===e.state||"idle"===e.state||"scanning"===e.state?(n="Locked",a="Waiting"):"unlocking"===e.state?(n="Unlocking...",a="Relay"):"unlocked"===e.state?(n="Unlocked",a="Open"):"locking"===e.state&&(n="Locking...",a="Relay off"),s.textContent=n,s.className="status-card-value","Unlocked"!==n&&"Unlocking..."!==n||s.classList.add("success"),document.getElementById("access-door-detail").textContent=a}var l=document.getElementById("access-server-status");if(l){var o=document.getElementById("access-server-detail");0===e.sst?(l.textContent="Online",l.className="status-card-value success",o&&(o.textContent=(e.serverLatency||0)+"ms")):1===e.sst?(l.textContent="Offline",l.className="status-card-value error",o&&(o.textContent=formatUptime(e.serverFailDuration||0))):(l.textContent="Not Configured",l.className="status-card-value",o&&(o.textContent="Set URL"))}var c=document.getElementById("access-last-fp");c&&(c.textContent=(e.lastFpId||0)>0?"#"+e.lastFpId:"--");var r=document.getElementById("access-fallback-status");r&&(r.textContent="Local fallback: "+(e.localFallback?"ON":"OFF"));var d=document.getElementById("access-last-event");d&&(d.textContent=e.lastEvent||"--")}});</script>
+                </div>
+                </main>
+                </div>
+                </body>
+                </html>

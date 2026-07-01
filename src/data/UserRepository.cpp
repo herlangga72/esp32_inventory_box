@@ -10,7 +10,7 @@ void ur_init(UserRepositoryMemory* mem, StorageManager* storage) {
 }
 
 int ur_create(UserRepositoryMemory* mem, StorageManager* storage, User* user) {
-    int id = storage->getInt("user_next_id", 1);
+    int id = storage->getInt("user_next_id", 0);
     user->id = id;
     user->createdAt = time(nullptr);
     user->active = true;

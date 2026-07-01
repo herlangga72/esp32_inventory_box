@@ -52,7 +52,7 @@ async function loadLogs() {
         const data = await API.get(`/logs?limit=${limit}`);
         const tbody = document.getElementById('logs-table');
 
-        if (!data.logs || data.logs.length === 0) {
+        if (!data.lg || data.lg.length === 0) {
             tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No logs recorded</td></tr>';
             return;
         }
@@ -60,7 +60,7 @@ async function loadLogs() {
         document.getElementById('log-count').textContent =
             `Total: ${data.total || 0} | Dropped: ${data.dropped || 0} | Size: ${formatBytes(data.fileSize || 0)}`;
 
-        tbody.innerHTML = data.logs.map(log => {
+        tbody.innerHTML = data.lg.map(log => {
             const lvlName = LEVEL_NAMES[log.level] || '?';
             const lvlClass = LEVEL_CLASSES[log.level] || 'muted';
             return `
@@ -81,9 +81,9 @@ async function loadLogs() {
 
 function formatLogDetails(log) {
     const parts = [];
-    if (log.toolId) parts.push('Tool #' + log.toolId);
-    if (log.userId) parts.push('User #' + log.userId);
-    if (log.weight) parts.push(Number(log.weight).toFixed(1) + 'g');
+    if (log.tid) parts.push('Tool #' + log.tid);
+    if (log.uid) parts.push('User #' + log.uid);
+    if (log.w) parts.push(Number(log.w).toFixed(1) + 'g');
     return parts.join(' | ') || '--';
 }
 
@@ -102,6 +102,7 @@ async function clearLogs() {
     }
 }
 
+pageManager.registerPage('logs', { init: init_logs });
 window.loadLogs = loadLogs;
 window.downloadLogs = downloadLogs;
 window.clearLogs = clearLogs;

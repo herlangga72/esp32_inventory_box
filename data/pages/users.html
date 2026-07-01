@@ -57,13 +57,13 @@ async function loadUsers() {
         
         tbody.innerHTML = data.users.map(user => `
             <tr>
-                <td>${user.id}</td>
-                <td>${user.name}</td>
-                <td>${user.fpId > 0 ? '<span style="color:var(--success);">#' + user.fpId + '</span>' : '<span style="color:var(--text-muted);">--</span>'}</td>
+                <td>${user.i}</td>
+                <td>${user.n}</td>
+                <td>${user.fp > 0 ? '<span style="color:var(--success);">#' + user.fp + '</span>' : '<span style="color:var(--text-muted);">--</span>'}</td>
                 <td><span class="badge ${user.active ? 'badge-success' : 'badge-muted'}">${user.active ? 'Active' : 'Inactive'}</span></td>
                 <td>
-                    <button class="btn btn-sm" onclick="editUser(${user.id})">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})">Delete</button>
+                    <button class="btn btn-sm" onclick="editUser(${user.i})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.i})">Delete</button>
                 </td>
             </tr>
         `).join('');
@@ -83,10 +83,10 @@ async function login() {
     
     try {
         const data = await API.post('/users/login', { pin });
-        if (data.success) {
-            document.getElementById('user-display').textContent = data.name;
+        if (data.ok) {
+            document.getElementById('user-display').textContent = data.n;
             document.getElementById('login-pin').value = '';
-            showToast(`Logged in as ${data.name}`, 'success');
+            showToast(`Logged in as ${data.n}`, 'success');
         } else {
             showToast('Invalid PIN', 'error');
         }
@@ -147,7 +147,7 @@ async function editUser(id) {
         showModal('Edit User #' + id, `
             <div class="form-group">
                 <label class="form-label">Name</label>
-                <input type="text" class="form-input" id="edit-name" value="${data.name || ''}">
+                <input type="text" class="form-input" id="edit-name" value="${data.n || ''}">
             </div>
             <div class="form-group">
                 <label class="form-label">PIN (leave empty to keep)</label>
@@ -155,7 +155,7 @@ async function editUser(id) {
             </div>
             <div class="form-group">
                 <label class="form-label">Fingerprint ID</label>
-                <input type="number" class="form-input form-input-sm" id="edit-fpid" min="1" max="127" value="${data.fpId > 0 ? data.fpId : ''}" placeholder="${data.fpId > 0 ? 'Current: #' + data.fpId : 'Not assigned'}">
+                <input type="number" class="form-input form-input-sm" id="edit-fpid" min="1" max="127" value="${data.fp > 0 ? data.fp : ''}" placeholder="${data.fp > 0 ? 'Current: #' + data.fp : 'Not assigned'}">
             </div>
         `, `
             <button class="btn" onclick="hideModal()">Cancel</button>
@@ -171,9 +171,9 @@ async function doEditUser(id) {
     const pin = document.getElementById('edit-pin').value;
     const fpIdInput = document.getElementById('edit-fpid').value;
     const body = {};
-    if (name) body.name = name;
+    if (name) body.n = name;
     if (pin) body.pin = pin;
-    if (fpIdInput) body.fpId = parseInt(fpIdInput);
+    if (fpIdInput) body.fp = parseInt(fpIdInput);
 
     try {
         await API.put('/users/' + id, body);
@@ -206,7 +206,7 @@ async function doDeleteUser(id) {
     }
 }
 
-// Global exports
+pageManager.registerPage('users', { init: init_users });
 window.loadUsers = loadUsers;
 window.showAddUserModal = showAddUserModal;
 window.createUser = createUser;

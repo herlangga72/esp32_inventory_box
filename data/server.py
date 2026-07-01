@@ -7,6 +7,8 @@ import http.server
 import json
 import os
 import sys
+import threading
+import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -62,9 +64,24 @@ STUBS = {
         "freeHeap": 180000, "uptime": 123456, "logLevel": 3
     },
     "/api/wifi": {
-        "connected": True, "apMode": False,
-        "ip": "192.168.1.100", "ssid": "LocalTest", "rssi": -45
+        "c": True, "a": False,
+        "ip": "192.168.1.100", "ss": "LocalTest", "rss": -45
     },
+    "/api/access/status": {
+        "state": "LOCKED", "lastEvent": "none", "lastFpId": 0,
+        "localFallback": True, "serverStatus": 2,
+        "serverFailDuration": 0, "serverLatency": 0,
+        "enrolling": False
+    },
+    "/api/access/server": {
+        "serverUrl": "", "serverToken": "", "configured": False,
+        "reachable": False, "localFallback": True
+    },
+    "/api/fingerprint/enroll/status": {
+        "enrolling": False, "step": -1, "fpId": 0, "stepName": "idle"
+    },
+    "/api/door": {"state": "LOCKED"},
+    "/scan": {"networks": [{"ss":"TestNet","rss":-50}]},
 }
 
 POST_STUBS = {
@@ -77,6 +94,9 @@ POST_STUBS = {
     "/api/config": {"success": True},
     "/api/wifi": {"success": True, "message": "Credentials saved. Rebooting..."},
     "/api/logs/clear": {"success": True},
+    "/api/contents/clear": {"success": True},
+    "/api/access/server": {"success": True},
+    "/api/door/unlock": {"success": True, "message": "Door unlocking"},
 }
 
 
@@ -124,8 +144,66 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._send_json({"success": True})
 
 
+# ---- SSE test server (port 8081) ----
+SSE_PORT = 8081
+
+class SseHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        # Send periodic events for testing
+        tick = 0
+        try:
+            while True:
+                status = json.dumps({
+                    "connected": True, "apMode": False, "ipAddress": "192.168.1.100",
+                    "state": "IDLE", "contents": 3, "weight": 450.5,
+                    "baseline": 200.0, "delta": 250.5, "uptime": int(time.time()),
+                    "freeHeap": 180000, "wifiRssi": -45, "wifiSSID": "TestNet", "currentUser": 0
+                })
+                if tick % 5 == 0:
+                    diag = json.dumps({
+                        "overallStatus": "OK", "uptime": int(time.time()),
+                        "totalErrors": 0, "lastError": "", "okCount": 6,
+                        "warningCount": 0, "errorCount": 0,
+                        "components": [{"name":"Storage","status":"OK","lastError":"","errorCount":0}]
+                    })
+                    self.wfile.write(f"event: diagnostics\ndata: {diag}\n\n".encode())
+                self.wfile.write(f"event: status\ndata: {status}\n\n".encode())
+                if tick % 2 == 0:
+                    access = json.dumps({"state":"LOCKED","lastEvent":"none","lastFpId":0,"localFallback":True,"enrolling":False})
+                    self.wfile.write(f"event: access\ndata: {access}\n\n".encode())
+                self.wfile.write(b"event: heartbeat\ndata: {}\n\n")
+                self.wfile.flush()
+                tick += 1
+                time.sleep(1)
+        except BrokenPipeError:
+            pass
+        except ConnectionResetError:
+            pass
+
+    def log_message(self, format, *args):
+        pass  # quiet
+
+
+def run_sse():
+    sse_addr = ("0.0.0.0", SSE_PORT)
+    sse = http.server.HTTPServer(sse_addr, SseHandler)
+    print(f"SSE test server on http://localhost:{SSE_PORT}/events")
+    sse.serve_forever()
+
+
 if __name__ == "__main__":
     os.chdir(DATA_DIR)
+
+    # Start SSE server in background thread
+    sse_thread = threading.Thread(target=run_sse, daemon=True)
+    sse_thread.start()
+
     addr = ("0.0.0.0", PORT)
     server = http.server.HTTPServer(addr, Handler)
     print(f"Serving {DATA_DIR} at http://localhost:{PORT}")

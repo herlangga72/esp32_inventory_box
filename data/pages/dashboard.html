@@ -85,11 +85,11 @@ async function loadContents() {
         const data = await API.get('/status');
         const grid = document.getElementById('contents-grid');
         
-        if (data.contentsList && data.contentsList.length > 0) {
-            grid.innerHTML = data.contentsList.map(item => `
+        if (data.cl && data.cl.length > 0) {
+            grid.innerHTML = data.cl.map(item => `
                 <div class="content-item">
-                    <div class="content-item-name">${item.name}</div>
-                    <div class="content-item-weight">${item.weight.toFixed(1)} g</div>
+                    <div class="content-item-name">${item.n}</div>
+                    <div class="content-item-weight">${item.w.toFixed(1)} g</div>
                 </div>
             `).join('');
         } else {
@@ -114,13 +114,25 @@ async function calibrate() {
     hideModal();
     try {
         const data = await API.post('/calibrate', {});
-        showToast(`Calibrated! Baseline: ${data.baseline.toFixed(2)} g`, 'success');
+        showToast(`Calibrated! Baseline: ${data.bl.toFixed(2)} g`, 'success');
         fetchStatus();
     } catch (err) {
         showToast('Calibration failed', 'error');
     }
 }
 
-// Auto-refresh contents
-setInterval(loadContents, 5000);
+pageManager.registerPage('dashboard', {
+    init: init_dashboard,
+    onStatus: function(data) {
+        var grid = document.getElementById('contents-grid');
+        if (!grid) return;
+        if (data.cl && data.cl.length > 0) {
+            grid.innerHTML = data.cl.map(function(item) {
+                return '<div class="content-item"><div class="content-item-name">' + item.n + '</div><div class="content-item-weight">' + item.w.toFixed(1) + ' g</div></div>';
+            }).join('');
+        } else {
+            grid.innerHTML = '<div class="table-empty">No tools in box</div>';
+        }
+    }
+});
 </script>
